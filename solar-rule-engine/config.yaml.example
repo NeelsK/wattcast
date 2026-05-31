@@ -3,23 +3,23 @@
 
 # --- Location ---
 location:
-  latitude: -27.7  # Reitz example; change per installation
-  longitude: 28.43
+  latitude: -27.7         # your GPS latitude
+  longitude: 28.43        # your GPS longitude
   timezone: "Africa/Johannesburg"
 
 # --- Solar panel array ---
 panels:
-  total_kwp: 5.5          # Total installed kWp
-  tilt: 20                # Degrees from horizontal
-  azimuth: 0              # 0 = North (Southern Hemisphere facing north), 90 = East, 270 = West
+  total_kwp: 5.5          # Total installed kWp (e.g. 10 × 550W = 5.5kWp)
+  tilt: 26                # Degrees from horizontal
+  azimuth: -5             # 0 = North (Southern Hemisphere), 90 = East, -90/270 = West
 
 # --- Battery ---
 battery:
-  capacity_kwh: 10.0      # Usable battery capacity
-  min_soc: 20             # Absolute floor - never command below this
+  capacity_kwh: 14.4      # Usable battery capacity in kWh
+  min_soc: 30             # Absolute floor — never command below this %
   max_soc: 100
 
-# --- MQTT (your Mosquitto broker, bridged to Solar Assistant) ---
+# --- MQTT (local Mosquitto, bridged to Solar Assistant) ---
 mqtt:
   host: "localhost"
   port: 1883
@@ -27,15 +27,18 @@ mqtt:
   password: ""
   inverter_id: "inverter_1"   # matches Solar Assistant topic prefix
 
-# --- Ecowitt weather station ---
-ecowitt:
-  source: "local"         # "local" or "cloud"
-  # For local:
-  station_ip: "192.168.1.x"
-  # For cloud:
-  app_key: ""
-  api_key: ""
-  mac_address: ""         # MAC of the gateway, e.g. "30:C9:22:xx:xx:xx"
+# --- Weather source ---
+# "mariadb" = read from local MariaDB (recommended — data from Ecowitt via webhook)
+# "openmeteo" = use Open-Meteo forecast only (no station, simpler setup)
+weather_source: "mariadb"
+
+# --- Local MariaDB (weather station data written by weather_webhook) ---
+mariadb:
+  host: "localhost"
+  port: 3306
+  database: "wattcast"
+  user: "wattcast"
+  password: "CHANGE_ME"   # set to your DB password
 
 # --- Switches ---
 # Each entry is a Wi-Fi switch the engine can control.
@@ -45,15 +48,15 @@ ecowitt:
 switches:
   - name: geyser
     type: shelly
-    ip: "192.168.1.x"
-    gen: 1                    # 1 = Gen1 (Shelly 1/1PM/Plug), 2 = Gen2 (Shelly Plus/Pro); omit to auto-detect
+    ip: "192.168.1.x"         # replace with your Shelly IP
+    gen: 2                    # 1 = Gen1 (Shelly 1/1PM/Plug), 2 = Gen2 (Shelly Plus/Pro)
     channel: 0
-    username: ""              # leave empty if no auth configured on the Shelly
-    password: ""
+    username: ""
+    password: "CHANGE_ME"     # your Shelly password
     role: geyser
-    element_watts: 2000       # geyser element size in Watts
+    element_watts: 3000       # 3kW element
     min_soc_to_run: 50        # don't run geyser below this battery SOC %
-    surplus_margin_watts: 200 # require this much headroom above element_watts before turning on
+    surplus_margin_watts: 300 # headroom above element_watts before turning on
     window_start_hour: 9      # earliest hour geyser may run (local time)
     window_end_hour: 16       # latest hour geyser may run
     min_on_minutes: 10        # minimum run time before allowing turn-off (protects element)
@@ -104,7 +107,7 @@ thresholds:
   soc_target_default: 70
 
   # Grid charge current limits (Amps) - inverter-specific max
-  grid_charge_max_a: 50
+  grid_charge_max_a: 40    # Deye/Sunsynk max grid charge current
   grid_charge_min_a: 10
   grid_charge_off: 0
 

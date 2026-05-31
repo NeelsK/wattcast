@@ -1,0 +1,31 @@
+[Unit]
+Description=WattCast Weather Webhook Receiver
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=wattcast
+WorkingDirectory=/home/wattcast/wattcast/weather_webhook
+ExecStart=/usr/bin/python3 /home/wattcast/wattcast/weather_webhook/weather_webhook.py
+Restart=always
+RestartSec=10
+
+Environment="DB_HOST=localhost"
+Environment="DB_PORT=3306"
+Environment="DB_NAME=wattcast"
+Environment="DB_USER=wattcast"
+Environment="DB_PASS=CHANGE_ME"
+Environment="TIMEZONE=Africa/Johannesburg"
+Environment="TZ_OFFSET_HOURS=2"
+Environment="UPSTREAM_URL=http://weather.eschatologist.org/weather_webhook.php"
+Environment="UPSTREAM_ENABLED=true"
+Environment="UPSTREAM_TIMEOUT=10"
+Environment="PORT=8080"
+Environment="LOG_LEVEL=INFO"
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
