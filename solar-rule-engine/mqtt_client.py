@@ -9,6 +9,7 @@ Uses a simple threading model: the MQTT loop runs in its own thread
 via get_system_state().
 """
 
+import json
 import logging
 import threading
 from datetime import datetime
@@ -81,6 +82,7 @@ class SolarAssistantMQTT:
             # Also subscribe to totals (battery SOC is under solar_assistant/total/)
             client.subscribe("solar_assistant/total/#")
             logger.info("MQTT connected, subscribed to solar_assistant/#")
+            self._publish_ha_discovery()
         else:
             logger.error("MQTT connection failed, rc=%d", rc)
 
@@ -106,6 +108,60 @@ class SolarAssistantMQTT:
             with self._lock:
                 self._readings[measurement] = payload
                 self._last_updated = datetime.now()
+
+    # -----------------------------------------------------------------------
+    # Home Assistant MQTT Discovery
+    # -----------------------------------------------------------------------
+
+    # Sensor definitions: (object_id, friendly_name, unit, device_class, state_class)
+    # device_class: https://developers.home-assistant.io/docs/core/entity/sensor/#available-device-classes
+    # state_class: "measurement" for live values, "total_increasing" for counters
+    _HA_SENSORS = [
+        ("irradiance",                       "Solar Irradiance",               "W/m²",  "irradiance",        "measurement"),
+        ("temperature",                      "Outdoor Temperature",            "°C",    "temperature",       "measurement"),
+        ("humidity",                         "Outdoor Humidity",               "%",     "humidity",          "measurement"),
+        ("wind_speed",                       "Wind Speed",                     "m/s",   "wind_speed",        "measurement"),
+        ("rain_rate",                        "Rain Rate",                      "mm/h",  "precipitation_intensity", "measurement"),
+        ("pv_forecast_today_remaining",      "PV Forecast Today Remaining",    "kWh",   "energy",            "measurement"),
+        ("pv_forecast_tomorrow",             "PV Forecast Tomorrow",           "kWh",   "energy",            "measurement"),
+        ("pv_forecast_peak_gti",             "PV Forecast Peak GTI Today",     "W/m²",  "irradiance",        "measurement"),
+        ("pv_forecast_tomorrow_rain_probability", "Tomorrow Rain Probability", "%",     None,                "measurement"),
+    ]
+
+    _HA_NODE_ID = "wattcast_weather"
+
+    def _publish_ha_discovery(self) -> None:
+        """
+        Publish Home Assistant MQTT discovery config for all weather sensors.
+        Called once on connect. HA auto-creates entities from these retained messages.
+        Discovery topic: homeassistant/sensor/<node_id>/<object_id>/config
+        """
+        device = {
+            "identifiers": [self._HA_NODE_ID],
+            "name": "WattCast Weather",
+            "model": "Ecowitt HP2553CA",
+            "manufacturer": "WattCast",
+        }
+
+        for object_id, name, unit, device_class, state_class in self._HA_SENSORS:
+            state_topic = f"wattcast/weather/{object_id}/state"
+            config: dict = {
+                "name": name,
+                "unique_id": f"{self._HA_NODE_ID}_{object_id}",
+                "state_topic": state_topic,
+                "unit_of_measurement": unit,
+                "state_class": state_class,
+                "device": device,
+            }
+            if device_class:
+                config["device_class"] = device_class
+
+            discovery_topic = f"homeassistant/sensor/{self._HA_NODE_ID}/{object_id}/config"
+            payload = json.dumps(config)
+            self._client.publish(discovery_topic, payload=payload, qos=1, retain=True)
+            logger.debug("HA discovery published: %s", discovery_topic)
+
+        logger.info("Home Assistant MQTT discovery published (%d sensors)", len(self._HA_SENSORS))
 
     # -----------------------------------------------------------------------
     # State access
