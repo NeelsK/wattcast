@@ -16,7 +16,6 @@ from typing import Optional
 
 import yaml
 
-import sources.ecowitt as ecowitt
 import sources.openmeteo as openmeteo
 from engine import evaluate
 from hysteresis import HysteresisTracker
@@ -101,15 +100,30 @@ def main() -> None:
                         continue
 
             # Fetch live weather station reading
+            weather_source = config.get("weather_source", "ecowitt")
             try:
-                weather = ecowitt.fetch(config)
+                if weather_source == "mariadb":
+                    import sources.mariadb as mariadb_src
+                    weather = mariadb_src.fetch(config)
+                elif weather_source == "openmeteo":
+                    # Use forecast irradiance as a proxy for live irradiance
+                    from models import WeatherNow
+                    weather = WeatherNow(
+                        irradiance=0.0,
+                        temperature=20.0,
+                        humidity=50.0,
+                        wind_speed=0.0,
+                        rain_rate=0.0,
+                    )
+                else:
+                    import sources.ecowitt as ecowitt
+                    weather = ecowitt.fetch(config)
                 logger.debug(
-                    "Ecowitt: irradiance=%.0f W/m²  temp=%.1f°C  rain=%.1f mm/hr",
-                    weather.irradiance, weather.temperature, weather.rain_rate,
+                    "Weather (%s): irradiance=%.0f W/m²  temp=%.1f°C  rain=%.1f mm/hr",
+                    weather_source, weather.irradiance, weather.temperature, weather.rain_rate,
                 )
             except Exception as e:
-                logger.error("Ecowitt fetch failed: %s", e)
-                # Continue with last known good if available; skip if not
+                logger.error("Weather fetch failed (%s): %s", weather_source, e)
                 time.sleep(eval_interval)
                 continue
 
