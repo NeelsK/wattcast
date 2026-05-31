@@ -1,0 +1,31 @@
+[Unit]
+Description=Solar Assistant MQTT Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=wattcast
+WorkingDirectory=/home/wattcast/mqtt_bridge
+ExecStart=/usr/bin/python3 /home/wattcast/mqtt_bridge/mqtt_bridge.py
+Restart=always
+RestartSec=10
+
+# Configuration — edit values here or use a drop-in override
+# (sudo systemctl edit mqtt_bridge)
+Environment="MQTT_HOST=10.69.69.31"
+Environment="MQTT_PORT=1883"
+Environment="MQTT_USER="
+Environment="MQTT_PASS="
+Environment="DB_HOST=10.69.69.4"
+Environment="DB_PORT=3306"
+Environment="DB_NAME=weather_data"
+Environment="DB_USER=weather_user"
+Environment="DB_PASS=CHANGE_ME"
+Environment="FLUSH_INTERVAL=60"
+Environment="LOG_LEVEL=INFO"
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

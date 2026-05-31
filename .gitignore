@@ -39,3 +39,21 @@ research/Sunsynk Connect/
 # Secrets / env
 .env.local
 *.secret
+
+# Site-specific config (copy config.yaml.example → config.yaml and fill in)
+solar-rule-engine/config.yaml
+mqtt_bridge/config.yaml
+
+# Research / working notes (not part of deployable project)
+research/
+design/
+docs/
+poc/
+WattCast-Installer-Consultation.docx
+localbus/
+
+# Internal memory file (Claude working notes)
+solar-rule-engine/solar-rule-engine-memory.md
+
+# Empty stale folders
+wattcast\ pi/

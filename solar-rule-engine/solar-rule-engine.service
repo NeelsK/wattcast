@@ -16,9 +16,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/solar-rule-engine
-ExecStart=/home/pi/solar-rule-engine/venv/bin/python main.py --config config.yaml
+User=wattcast
+WorkingDirectory=/home/wattcast/solar-rule-engine
+ExecStart=/home/wattcast/solar-rule-engine/venv/bin/python main.py --config config.yaml
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal
