@@ -16,7 +16,7 @@ from typing import Optional
 
 import paho.mqtt.client as mqtt
 
-from models import Command, SystemState
+from models import Command, ForecastSummary, SystemState, WeatherNow
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,42 @@ class SolarAssistantMQTT:
     # -----------------------------------------------------------------------
     # Publishing
     # -----------------------------------------------------------------------
+
+    def publish_weather(self, weather: WeatherNow, forecast: "ForecastSummary | None" = None) -> None:
+        """
+        Publish weather station readings (and optionally forecast) to MQTT.
+
+        Topics follow the Solar Assistant /state convention:
+            wattcast/weather/<field>/state  → float payload
+
+        Always publishes even in dry_run mode — weather is read-only data,
+        not an inverter command.
+        """
+        readings: dict[str, float] = {
+            "irradiance": weather.irradiance,
+            "temperature": weather.temperature,
+            "humidity": weather.humidity,
+            "wind_speed": weather.wind_speed,
+            "rain_rate": weather.rain_rate,
+        }
+
+        if forecast is not None:
+            readings["pv_forecast_today_remaining"] = forecast.today_remaining_yield_kwh
+            readings["pv_forecast_tomorrow"] = forecast.tomorrow_yield_kwh
+            readings["pv_forecast_peak_gti"] = forecast.today_peak_gti
+            readings["pv_forecast_tomorrow_rain_probability"] = forecast.tomorrow_rain_probability
+
+        for field, value in readings.items():
+            topic = f"wattcast/weather/{field}/state"
+            payload = f"{value:.2f}"
+            result = self._client.publish(topic, payload=payload, qos=0, retain=True)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                logger.error("Failed to publish weather %s: rc=%d", topic, result.rc)
+
+        logger.debug(
+            "Weather published to MQTT: irradiance=%.0f W/m²  temp=%.1f°C  rain=%.1f mm/hr",
+            weather.irradiance, weather.temperature, weather.rain_rate,
+        )
 
     def publish_command(self, cmd: Command) -> None:
         """

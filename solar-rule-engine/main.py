@@ -127,6 +127,9 @@ def main() -> None:
                 time.sleep(eval_interval)
                 continue
 
+            # Publish weather data to MQTT
+            mqtt.publish_weather(weather, forecast)
+
             # Get system state from MQTT
             system = mqtt.get_system_state()
             if system is None:
