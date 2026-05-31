@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+.env
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Compiled binaries
+*.bin
+
+# Test cache
+.pytest_cache/
+
+# Duplicate / to-be-deleted (pending manual Finder cleanup)
+poc/solar-rule-engine/
+poc/solar-rule-engine.zip
+research/Sunsynk Connect/
+
+# Secrets / env
+.env.local
+*.secret

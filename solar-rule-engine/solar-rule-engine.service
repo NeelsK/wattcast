@@ -1,0 +1,31 @@
+# /etc/systemd/system/solar-rule-engine.service
+#
+# Install:
+#   sudo cp solar-rule-engine.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable solar-rule-engine
+#   sudo systemctl start solar-rule-engine
+#
+# Logs:
+#   journalctl -u solar-rule-engine -f
+
+[Unit]
+Description=Solar Rule Engine
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/solar-rule-engine
+ExecStart=/home/pi/solar-rule-engine/venv/bin/python main.py --config config.yaml
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Give the network and MQTT broker time to start before we do
+ExecStartPre=/bin/sleep 15
+
+[Install]
+WantedBy=multi-user.target

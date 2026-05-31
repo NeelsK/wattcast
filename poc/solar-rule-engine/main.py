@@ -1,0 +1,190 @@
+"""
+main.py — Entry point. Wires data sources, rule engine, and MQTT together.
+
+Run with:
+    python main.py --config config.yaml
+
+Systemd service or cron can manage restarts.
+"""
+
+import argparse
+import logging
+import signal
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+
+import yaml
+
+import sources.ecowitt as ecowitt
+import sources.openmeteo as openmeteo
+from engine import evaluate
+from hysteresis import HysteresisTracker
+from models import ForecastSummary
+from mqtt_client import SolarAssistantMQTT
+from switches.manager import SwitchManager
+from switches.state_tracker import SwitchStateRegistry
+
+
+def setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+def load_config(path: str) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Solar Rule Engine")
+    parser.add_argument("--config", default="config.yaml")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    engine_cfg = config["engine"]
+    setup_logging(engine_cfg.get("log_level", "INFO"))
+
+    logger = logging.getLogger("main")
+
+    if engine_cfg.get("dry_run", True):
+        logger.warning("DRY RUN MODE — commands will be logged but NOT sent to inverter")
+
+    # --- Setup ---
+    mqtt = SolarAssistantMQTT(config)
+    hysteresis = HysteresisTracker(
+        min_interval_minutes=engine_cfg.get("hysteresis_minutes", 15)
+    )
+    switch_manager = SwitchManager(config)
+    switch_registry = SwitchStateRegistry(config)
+    forecast: Optional[ForecastSummary] = None
+    forecast_fetched_at: Optional[datetime] = None
+    forecast_refresh_td = timedelta(minutes=engine_cfg.get("forecast_refresh_minutes", 60))
+    eval_interval = engine_cfg.get("eval_interval_seconds", 300)
+
+    # Graceful shutdown
+    running = True
+    def _shutdown(sig, frame):
+        nonlocal running
+        logger.info("Shutdown signal received")
+        running = False
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    # --- Connect MQTT and wait for initial readings ---
+    mqtt.connect()
+    logger.info("Waiting 10s for initial MQTT readings from Solar Assistant...")
+    time.sleep(10)
+
+    # --- Main loop ---
+    logger.info("Starting rule engine loop (interval: %ds)", eval_interval)
+
+    while running:
+        loop_start = datetime.now()
+
+        try:
+            # Refresh forecast if stale or not yet fetched
+            if forecast is None or (datetime.now() - forecast_fetched_at) > forecast_refresh_td:
+                logger.info("Refreshing Open-Meteo forecast...")
+                try:
+                    forecast = openmeteo.fetch(config)
+                    forecast_fetched_at = datetime.now()
+                except Exception as e:
+                    logger.error("Forecast fetch failed: %s", e)
+                    if forecast is None:
+                        logger.warning("No forecast available — skipping this cycle")
+                        time.sleep(eval_interval)
+                        continue
+
+            # Fetch live weather station reading
+            try:
+                weather = ecowitt.fetch(config)
+                logger.debug(
+                    "Ecowitt: irradiance=%.0f W/m²  temp=%.1f°C  rain=%.1f mm/hr",
+                    weather.irradiance, weather.temperature, weather.rain_rate,
+                )
+            except Exception as e:
+                logger.error("Ecowitt fetch failed: %s", e)
+                # Continue with last known good if available; skip if not
+                time.sleep(eval_interval)
+                continue
+
+            # Get system state from MQTT
+            system = mqtt.get_system_state()
+            if system is None:
+                logger.warning("No system state yet — waiting for MQTT readings")
+                time.sleep(eval_interval)
+                continue
+
+            logger.debug(
+                "System: SOC=%.0f%%  PV=%.0fW  Load=%.0fW  Grid=%.0fW",
+                system.battery_soc, system.pv_power, system.load_power, system.grid_power,
+            )
+
+            # Run the decision engine
+            commands, switch_actions = evaluate(system, weather, forecast, config)
+
+            # Apply hysteresis filter to inverter commands
+            approved = hysteresis.filter(commands)
+            skipped = len(commands) - len(approved)
+            if skipped:
+                logger.debug("%d inverter command(s) suppressed by hysteresis", skipped)
+
+            # Publish approved inverter commands
+            for cmd in approved:
+                mqtt.publish_command(cmd)
+
+            # Execute switch actions — guarded by SwitchRunState
+            for action in switch_actions:
+                name = action.switch_name
+                if name not in switch_manager:
+                    logger.warning("Engine produced action for unknown switch '%s'", name)
+                    continue
+
+                state = switch_registry[name]
+                sw = switch_manager[name]
+
+                if action.turn_on:
+                    allowed, block_reason = state.can_turn_on()
+                    if allowed:
+                        ok = sw.turn_on(reason=action.reason)
+                        if ok:
+                            state.record_turn_on()
+                    else:
+                        logger.debug(
+                            "Switch '%s' turn-on blocked by guard: %s", name, block_reason
+                        )
+                else:
+                    allowed, block_reason = state.can_turn_off()
+                    if allowed:
+                        ok = sw.turn_off(reason=action.reason)
+                        if ok:
+                            state.record_turn_off()
+                    else:
+                        logger.debug(
+                            "Switch '%s' turn-off blocked by guard: %s", name, block_reason
+                        )
+
+            # Log switch states periodically
+            switch_registry.log_all()
+
+        except Exception as e:
+            logger.exception("Unexpected error in main loop: %s", e)
+
+        # Sleep for the remainder of the interval
+        elapsed = (datetime.now() - loop_start).total_seconds()
+        sleep_time = max(0, eval_interval - elapsed)
+        logger.debug("Loop took %.1fs, sleeping %.1fs", elapsed, sleep_time)
+        time.sleep(sleep_time)
+
+    # --- Cleanup ---
+    logger.info("Shutting down")
+    mqtt.disconnect()
+
+
+if __name__ == "__main__":
+    main()

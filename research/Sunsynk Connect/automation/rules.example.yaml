@@ -1,0 +1,75 @@
+# Example automation rules for Sunsynk Connect.
+# Each rule has:
+#   name:     unique identifier (used for cooldown tracking)
+#   when:     Python-ish expression. `s` is the snapshot (s.battery_soc, s.grid_power, ...)
+#             `now()` returns a datetime.
+#   do:       a single action or a list of actions
+#   cooldown: minimum seconds between firings (default 300)
+#
+# Action types:
+#   {type: log, message: "..."}                    # log a message
+#   {type: set, register: <name>, value: <int>}    # write a writable register
+#   {type: shell, command: "..."}                  # run a shell command
+#
+# IMPORTANT: test new rules with `--dry-run` first. A wrong rule can drain
+# your battery into the grid or import expensive grid power overnight.
+
+rules:
+  # ---------------------------------------------------------------
+  # 1. If grid is up and battery is critically low, raise the
+  #    minimum SOC so the inverter charges the battery from grid.
+  # ---------------------------------------------------------------
+  - name: emergency_grid_charge
+    when: "s.battery_soc < 15 and s.grid_voltage > 200"
+    do:
+      - {type: log, message: "Battery critical, raising min SOC to force grid charge"}
+      - {type: set, register: battery_min_soc, value: 40}
+    cooldown: 1800   # don't re-fire for 30 minutes
+
+  # ---------------------------------------------------------------
+  # 2. If grid is down (load-shedding), drop min SOC to allow
+  #    the battery to discharge as low as possible.
+  # ---------------------------------------------------------------
+  - name: loadshedding_max_discharge
+    when: "s.grid_voltage < 50"
+    do:
+      - {type: log, message: "Grid is down — allowing battery to discharge to 10%"}
+      - {type: set, register: battery_min_soc, value: 10}
+    cooldown: 600
+
+  # ---------------------------------------------------------------
+  # 3. Once the grid is back, restore a sensible reserve.
+  # ---------------------------------------------------------------
+  - name: grid_back_restore_soc
+    when: "s.grid_voltage > 200 and s.battery_soc > 30"
+    do:
+      - {type: set, register: battery_min_soc, value: 25}
+
+  # ---------------------------------------------------------------
+  # 4. Solar peak — switch to "Selling First" if export tariff applies.
+  #    Adjust hour range to match your TOU schedule.
+  # ---------------------------------------------------------------
+  - name: midday_export
+    when: "10 <= now().hour < 15 and (s.pv1_power + s.pv2_power) > 3000 and s.battery_soc > 80"
+    do:
+      - {type: set, register: work_mode, value: 0}   # Selling First
+    cooldown: 3600
+
+  # ---------------------------------------------------------------
+  # 5. End of solar day — back to Limited to Load.
+  # ---------------------------------------------------------------
+  - name: evening_self_consume
+    when: "now().hour == 17 and now().minute < 5"
+    do:
+      - {type: set, register: work_mode, value: 1}   # Zero Export to Load
+    cooldown: 3600
+
+  # ---------------------------------------------------------------
+  # 6. Push a notification on big events (uses `apprise` if installed,
+  #    or just an echo if not).
+  # ---------------------------------------------------------------
+  - name: notify_low_battery
+    when: "s.battery_soc < 20 and s.grid_voltage < 50"
+    do:
+      - {type: shell, command: "echo 'Sunsynk: Battery <20% during load-shedding!' | logger -t sunsynk"}
+    cooldown: 1800
