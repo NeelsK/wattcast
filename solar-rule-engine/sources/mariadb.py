@@ -66,8 +66,8 @@ def fetch(config: dict) -> WeatherNow:
         conn.close()
 
     if not row:
-        logger.warning("No weather readings in local DB — returning zeros")
-        return WeatherNow()
+        logger.warning("No weather readings in local DB — returning zeros (Ecowitt not yet connected?)")
+        return WeatherNow(irradiance=0.0, temperature=20.0, humidity=50.0, wind_speed=0.0, rain_rate=0.0)
 
     age = (datetime.now() - row["timestamp"]).total_seconds()
     if age > MAX_AGE_SECONDS:
