@@ -55,13 +55,13 @@ switches:
     password: "CHANGE_ME"     # your Shelly password
     role: geyser
     element_watts: 3000       # 3kW element
-    min_soc_to_run: 50        # don't run geyser below this battery SOC %
+    min_soc_to_run: 75        # don't run geyser below this battery SOC %
     surplus_margin_watts: 300 # headroom above element_watts before turning on
     window_start_hour: 9      # earliest hour geyser may run (local time)
-    window_end_hour: 16       # latest hour geyser may run
+    window_end_hour: 15       # latest hour geyser may run
     min_on_minutes: 10        # minimum run time before allowing turn-off (protects element)
     max_daily_minutes: 180    # daily run budget (3 hours)
-    min_off_minutes: 5        # minimum off time before allowing turn-on again
+    min_off_minutes: 10       # minimum off time before allowing turn-on again
 
   # Uncomment and fill in for additional switches:
   # - name: pool_pump
