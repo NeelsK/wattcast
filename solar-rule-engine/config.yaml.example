@@ -1,119 +1,263 @@
-# solar-rule-engine config
-# Copy this file per installation and adjust values.
+# WattCast Solar Rule Engine — Configuration
+# Copy to config.yaml and adjust values for your installation.
+# config.yaml is gitignored (contains passwords).
 
-# --- Location ---
+# ---------------------------------------------------------------------------
+# Location
+# ---------------------------------------------------------------------------
 location:
-  latitude: -27.7         # your GPS latitude
-  longitude: 28.43        # your GPS longitude
+  latitude: -27.7
+  longitude: 28.43
   timezone: "Africa/Johannesburg"
 
-# --- Solar panel array ---
+# ---------------------------------------------------------------------------
+# Solar panel array
+# ---------------------------------------------------------------------------
 panels:
-  total_kwp: 5.5          # Total installed kWp (e.g. 10 × 550W = 5.5kWp)
+  total_kwp: 5.5          # Total installed kWp
   tilt: 26                # Degrees from horizontal
   azimuth: -5             # 0 = North (Southern Hemisphere), 90 = East, -90/270 = West
 
-# --- Battery ---
+# ---------------------------------------------------------------------------
+# Battery
+# ---------------------------------------------------------------------------
 battery:
   capacity_kwh: 14.4      # Usable battery capacity in kWh
-  min_soc: 30             # Absolute floor — never command below this %
+  min_soc: 40             # Absolute floor — never set capacity_point below this
   max_soc: 100
 
-# --- MQTT (local Mosquitto, bridged to Solar Assistant) ---
+# ---------------------------------------------------------------------------
+# MQTT (local Mosquitto, bridged to Solar Assistant)
+# ---------------------------------------------------------------------------
 mqtt:
   host: "localhost"
   port: 1883
-  username: ""            # leave empty if no auth
+  username: ""
   password: ""
-  inverter_id: "inverter_1"   # matches Solar Assistant topic prefix
+  inverter_id: "inverter_1"
 
-# --- Weather source ---
-# "mariadb" = read from local MariaDB (recommended — data from Ecowitt via webhook)
-# "openmeteo" = use Open-Meteo forecast only (no station, simpler setup)
+# ---------------------------------------------------------------------------
+# Weather source
+# "mariadb"   = read from local MariaDB (recommended)
+# "openmeteo" = use Open-Meteo forecast only (no weather station)
+# ---------------------------------------------------------------------------
 weather_source: "mariadb"
 
-# --- Local MariaDB (weather station data written by weather_webhook) ---
+# ---------------------------------------------------------------------------
+# Local MariaDB
+# ---------------------------------------------------------------------------
 mariadb:
   host: "localhost"
   port: 3306
   database: "wattcast"
   user: "wattcast"
-  password: "CHANGE_ME"   # set to your DB password
+  password: "CHANGE_ME"
 
-# --- Switches ---
-# Each entry is a Wi-Fi switch the engine can control.
-# Supported types: shelly, http
-# Supported roles: geyser, pool_pump, generic_load
-#
-switches:
-  - name: geyser
-    type: shelly
-    ip: "192.168.1.x"         # replace with your Shelly IP
-    gen: 2                    # 1 = Gen1 (Shelly 1/1PM/Plug), 2 = Gen2 (Shelly Plus/Pro)
-    channel: 0
-    username: ""
-    password: "CHANGE_ME"     # your Shelly password
-    role: geyser
-    element_watts: 3000       # 3kW element
-    min_soc_to_run: 75        # don't run geyser below this battery SOC %
-    surplus_margin_watts: 300 # headroom above element_watts before turning on
-    window_start_hour: 9      # earliest hour geyser may run (local time)
-    window_end_hour: 15       # latest hour geyser may run
-    min_on_minutes: 10        # minimum run time before allowing turn-off (protects element)
-    max_daily_minutes: 180    # daily run budget (3 hours)
-    min_off_minutes: 10       # minimum off time before allowing turn-on again
-
-  # Uncomment and fill in for additional switches:
-  # - name: pool_pump
-  #   type: shelly
-  #   ip: "192.168.1.y"
-  #   gen: 2
-  #   channel: 0
-  #   role: pool_pump
-  #   pump_watts: 750
-  #   min_soc_to_run: 40
-  #   window_start_hour: 10
-  #   window_end_hour: 15
-  #   min_on_minutes: 30
-  #   max_daily_minutes: 240
-  #   min_off_minutes: 10
-
-  # - name: workshop_ac
-  #   type: http
-  #   url_on:  "http://192.168.1.z/cm?cmnd=Power%20On"   # Tasmota example
-  #   url_off: "http://192.168.1.z/cm?cmnd=Power%20Off"
-  #   url_status: "http://192.168.1.z/cm?cmnd=Power"
-  #   status_on_value: "ON"
-  #   role: generic_load
-  #   load_watts: 1500
-  #   min_soc_to_run: 60
-  #   window_start_hour: 9
-  #   window_end_hour: 17
-  #   min_on_minutes: 15
-  #   max_daily_minutes: 120
-  #   min_off_minutes: 10
+# ---------------------------------------------------------------------------
+# Engine behaviour
+# ---------------------------------------------------------------------------
 engine:
-  eval_interval_seconds: 300      # How often to run the decision loop (5 min)
-  forecast_refresh_minutes: 60    # How often to refresh Open-Meteo forecast
-  hysteresis_minutes: 15          # Minimum time between same-topic changes
-  dry_run: true                   # true = log commands only, do not publish to inverter
-  log_level: "INFO"               # DEBUG, INFO, WARNING
+  eval_interval_seconds: 300       # How often to run the rule evaluation (5 min)
+  forecast_refresh_minutes: 60     # How often to refresh Open-Meteo forecast
+  preset_cooldown_minutes: 30      # Minimum time between preset switches
+  dry_run: true                    # true = evaluate only, NOT sent to inverter
+  log_level: "INFO"
 
-# --- Thresholds (tune per site) ---
-thresholds:
-  # SOC targets that rules may command (within battery.min_soc / battery.max_soc)
-  soc_target_rainy_day: 90        # Charge to this when bad forecast
-  soc_target_good_day: 50         # Allow discharge to this when good forecast
-  soc_target_default: 70
+# ---------------------------------------------------------------------------
+# PRESETS
+#
+# Each preset defines exactly 6 TOU time slots.
+# Unused slots repeat the last active slot's time with grid_charge: false.
+#
+# Per slot:
+#   time:        "HH:MM"  — slot start time
+#   capacity:    int      — SOC discharge floor % (min 40%)
+#   grid_charge: bool     — grid charging enabled for this slot
+# ---------------------------------------------------------------------------
+presets:
 
-  # Grid charge current limits (Amps) - inverter-specific max
-  grid_charge_max_a: 40    # Deye/Sunsynk max grid charge current
-  grid_charge_min_a: 10
-  grid_charge_off: 0
+  # Default — balanced winter day
+  # Overnight draws ~15% SOC (300W load, 00:00–07:00).
+  # Solar peaks 11:00–14:00. Battery full by ~14:00.
+  default:
+    description: "Balanced winter — protects overnight, frees up during solar hours"
+    slots:
+      - time: "00:00"
+        capacity: 55
+        grid_charge: true
+        # overnight floor — 55% covers ~15% draw to 07:00 with buffer above 40%
+      - time: "07:00"
+        capacity: 40
+        grid_charge: true
+        # solar ramping — allow discharge, PV will recover
+      - time: "13:00"
+        capacity: 40
+        grid_charge: true
+        # peak surplus window — floor irrelevant, battery charging hard
+      - time: "18:00"
+        capacity: 60
+        grid_charge: true
+        # evening — no solar, protect enough for overnight
+      - time: "18:00"
+        capacity: 60
+        grid_charge: false
+        # disabled
+      - time: "18:00"
+        capacity: 60
+        grid_charge: false
+        # disabled
 
-  # Forecast thresholds
-  forecast_good_kwh: 15.0         # Expected daily yield above which it's a "good" day
-  forecast_poor_kwh: 5.0          # Below which it's a "poor" day
+  # Summer good — excellent forecast (>15 kWh tomorrow, <30% rain)
+  summer_good:
+    description: "Good solar day — low floors, let solar fill the battery"
+    slots:
+      - time: "00:00"
+        capacity: 40
+        grid_charge: true
+      - time: "07:00"
+        capacity: 40
+        grid_charge: true
+      - time: "13:00"
+        capacity: 40
+        grid_charge: true
+      - time: "18:00"
+        capacity: 50
+        grid_charge: true
+      - time: "18:00"
+        capacity: 50
+        grid_charge: false
+      - time: "18:00"
+        capacity: 50
+        grid_charge: false
 
-  # Rain probability threshold
-  rain_probability_high: 0.60     # 60% chance of rain = treat as rainy
+  # Winter mixed — moderate forecast (5–15 kWh tomorrow)
+  winter_mixed:
+    description: "Mixed forecast — moderate protection, allow solar to contribute"
+    slots:
+      - time: "00:00"
+        capacity: 60
+        grid_charge: true
+      - time: "07:00"
+        capacity: 50
+        grid_charge: true
+      - time: "13:00"
+        capacity: 40
+        grid_charge: true
+      - time: "18:00"
+        capacity: 65
+        grid_charge: true
+      - time: "18:00"
+        capacity: 65
+        grid_charge: false
+      - time: "18:00"
+        capacity: 65
+        grid_charge: false
+
+  # Storm protection — poor forecast (<5 kWh) or active rain
+  storm_protection:
+    description: "Poor forecast or active rain — protect battery, grid charge to fill"
+    slots:
+      - time: "00:00"
+        capacity: 70
+        grid_charge: true
+      - time: "07:00"
+        capacity: 60
+        grid_charge: true
+      - time: "13:00"
+        capacity: 55
+        grid_charge: true
+      - time: "18:00"
+        capacity: 75
+        grid_charge: true
+      - time: "18:00"
+        capacity: 75
+        grid_charge: false
+      - time: "18:00"
+        capacity: 75
+        grid_charge: false
+
+# ---------------------------------------------------------------------------
+# RULES
+#
+# Evaluated in ascending priority order (lower number = higher priority).
+# First matching rule wins — its preset is applied.
+#
+# Condition structure:
+#   conditions:
+#     any:              # groups are OR'd together
+#       - all:          # conditions within a group are AND'd
+#           - field: <name>
+#             op: ">" | "<" | ">=" | "<=" | "==" | "!="
+#             value: <number>
+#
+# Available fields:
+#   battery_soc                  — % (0–100)
+#   pv_power                     — W
+#   load_power                   — W
+#   net_surplus                  — W (pv - load)
+#   rain_rate                    — mm/h
+#   rain_probability_tomorrow    — % (0–100)
+#   forecast_tomorrow_kwh        — kWh
+#   forecast_today_remaining_kwh — kWh
+#   irradiance                   — W/m²
+#   irradiance_avg_15min         — W/m² (15-min rolling average)
+#   cloud_cover_now              — % (0–100)
+#   loadshedding_active          — 1 or 0  [stub]
+#   loadshedding_next_hours      — hours   [stub]
+#   hour                         — 0–23
+# ---------------------------------------------------------------------------
+rules:
+
+  - name: "Storm Protection"
+    priority: 10
+    preset: storm_protection
+    description: "Active rain or very poor forecast tomorrow"
+    conditions:
+      any:
+        - all:
+            - field: rain_rate
+              op: ">"
+              value: 2.0
+        - all:
+            - field: rain_probability_tomorrow
+              op: ">"
+              value: 70
+            - field: forecast_tomorrow_kwh
+              op: "<"
+              value: 5.0
+
+  - name: "Good Solar Day"
+    priority: 20
+    preset: summer_good
+    description: "Tomorrow forecast excellent, low rain risk"
+    conditions:
+      any:
+        - all:
+            - field: forecast_tomorrow_kwh
+              op: ">"
+              value: 15.0
+            - field: rain_probability_tomorrow
+              op: "<"
+              value: 30
+
+  - name: "Mixed Day"
+    priority: 30
+    preset: winter_mixed
+    description: "Moderate forecast — some solar expected"
+    conditions:
+      any:
+        - all:
+            - field: forecast_tomorrow_kwh
+              op: ">="
+              value: 5.0
+            - field: forecast_tomorrow_kwh
+              op: "<"
+              value: 15.0
+
+  - name: "Default"
+    priority: 999
+    preset: default
+    default: true
+    description: "Fallback when no other rule matches"
+    conditions:
+      any: []

@@ -1,378 +1,246 @@
 """
-engine.py — Multi-variable decision logic for solar system control.
+engine.py — Preset-based rule evaluation for solar system control.
 
 The evaluate() function is PURE:
-  - Takes only dataclasses + config dict + current time
-  - Returns a list of Command objects
+  - Takes system state, weather, forecast, config, and optional current time
+  - Evaluates rules in priority order (lowest number first)
+  - Returns an EvalResult with the matched rule/preset and reason
   - No I/O, no MQTT, no HTTP, no side effects
   - Fully unit-testable with synthetic inputs
 
-Decision hierarchy (later rules can override earlier ones):
-  1. Safety floor — always respect absolute SOC minimum
-  2. Emergency conditions — override everything (rain now + low SOC)
-  3. Forecast-based planning — adjust grid charge based on tomorrow's yield
-  4. Time-of-day adjustments — fine-tune within the day
-  5. Real-time corrections — respond to actual PV vs forecast divergence
+Rule structure (from config):
+  rules:
+    - name: "Storm Protection"
+      priority: 10
+      preset: storm_protection
+      conditions:
+        any:              # groups are OR'd
+          - all:          # conditions within a group are AND'd
+              - field: rain_rate
+                op: ">"
+                value: 2.0
 
-Commands produced:
-  - max_grid_charge_current: how hard to charge from grid (0 = off)
-  - capacity_point_1: SOC floor the inverter uses for work mode
+Available condition fields:
+  battery_soc               — % (0–100)
+  pv_power                  — W
+  load_power                — W
+  net_surplus               — W (pv - load)
+  rain_rate                 — mm/h
+  rain_probability_tomorrow — % (0–100)
+  rain_probability_today    — % (0–100, max hourly)
+  forecast_tomorrow_kwh     — kWh
+  forecast_today_remaining_kwh — kWh
+  irradiance                — W/m²
+  irradiance_avg_15min      — W/m²
+  cloud_cover_now           — % (0–100)
+  loadshedding_active       — 1 (true) or 0 (false)  [stub]
+  loadshedding_next_hours   — hours until next slot   [stub]
+  hour                      — current hour (0–23)
 """
 
 import logging
-from datetime import datetime, time
+from datetime import datetime
+from typing import Optional
 
-from models import Command, ForecastSummary, SwitchAction, SystemState, WeatherNow
+from models import (
+    Condition, ConditionGroup, EvalResult, ForecastSummary,
+    Preset, Rule, SystemState, TimeSlot, WeatherNow,
+)
 
 logger = logging.getLogger(__name__)
 
+OPERATORS = {
+    ">":  lambda a, b: a > b,
+    "<":  lambda a, b: a < b,
+    ">=": lambda a, b: a >= b,
+    "<=": lambda a, b: a <= b,
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+}
+
+
+# ---------------------------------------------------------------------------
+# Config parsing helpers
+# ---------------------------------------------------------------------------
+
+def load_presets(config: dict) -> dict[str, Preset]:
+    """Parse presets section of config into Preset objects."""
+    presets: dict[str, Preset] = {}
+    for name, data in config.get("presets", {}).items():
+        raw_slots = data.get("slots", [])
+        slots = [
+            TimeSlot(
+                time=s["time"],
+                capacity=int(s["capacity"]),
+                grid_charge=bool(s.get("grid_charge", True)),
+            )
+            for s in raw_slots
+        ]
+        # Pad to 6 slots by repeating last slot with grid_charge=False
+        while len(slots) < 6:
+            last = slots[-1]
+            slots.append(TimeSlot(time=last.time, capacity=last.capacity, grid_charge=False))
+        presets[name] = Preset(
+            name=name,
+            description=data.get("description", ""),
+            slots=slots[:6],
+        )
+    return presets
+
+
+def load_rules(config: dict) -> list[Rule]:
+    """Parse rules section of config into Rule objects, sorted by priority."""
+    rules: list[Rule] = []
+    for r in config.get("rules", []):
+        groups: list[ConditionGroup] = []
+        for group_conditions in r.get("conditions", {}).get("any", []):
+            conditions = [
+                Condition(
+                    field=c["field"],
+                    op=c["op"],
+                    value=float(c["value"]),
+                )
+                for c in group_conditions.get("all", [])
+            ]
+            groups.append(ConditionGroup(conditions=conditions))
+        rules.append(Rule(
+            name=r["name"],
+            priority=int(r.get("priority", 999)),
+            preset=r["preset"],
+            groups=groups,
+            default=bool(r.get("default", False)),
+            description=r.get("description", ""),
+        ))
+    return sorted(rules, key=lambda r: r.priority)
+
+
+# ---------------------------------------------------------------------------
+# Condition evaluation
+# ---------------------------------------------------------------------------
+
+def _build_context(
+    system: SystemState,
+    weather: WeatherNow,
+    forecast: ForecastSummary,
+    now: datetime,
+) -> dict[str, float]:
+    """Build a flat dict of all available condition fields."""
+    return {
+        "battery_soc":                  system.battery_soc,
+        "pv_power":                     system.pv_power,
+        "load_power":                   system.load_power,
+        "net_surplus":                  system.net_solar_surplus,
+        "rain_rate":                    weather.rain_rate,
+        "rain_probability_tomorrow":    forecast.tomorrow_rain_probability * 100,
+        "forecast_tomorrow_kwh":        forecast.tomorrow_yield_kwh,
+        "forecast_today_remaining_kwh": forecast.today_remaining_yield_kwh,
+        "irradiance":                   weather.irradiance,
+        "irradiance_avg_15min":         weather.irradiance_avg_15min,
+        "cloud_cover_now":              forecast.cloud_cover_now * 100,
+        "loadshedding_active":          0.0,   # stub
+        "loadshedding_next_hours":      99.0,  # stub
+        "hour":                         float(now.hour),
+    }
+
+
+def _evaluate_condition(cond: Condition, ctx: dict[str, float]) -> tuple[bool, str]:
+    """Evaluate a single condition. Returns (matched, description)."""
+    if cond.field not in ctx:
+        logger.warning("Unknown condition field '%s' — treating as False", cond.field)
+        return False, f"unknown field '{cond.field}'"
+    actual = ctx[cond.field]
+    op_fn = OPERATORS.get(cond.op)
+    if op_fn is None:
+        logger.warning("Unknown operator '%s' — treating as False", cond.op)
+        return False, f"unknown op '{cond.op}'"
+    result = op_fn(actual, cond.value)
+    desc = f"{cond.field}={actual:.1f} {cond.op} {cond.value} → {'✓' if result else '✗'}"
+    return result, desc
+
+
+def _evaluate_group(group: ConditionGroup, ctx: dict[str, float]) -> tuple[bool, list[str]]:
+    """Evaluate a condition group (AND of all conditions)."""
+    descs = []
+    for cond in group.conditions:
+        matched, desc = _evaluate_condition(cond, ctx)
+        descs.append(desc)
+        if not matched:
+            return False, descs
+    return True, descs
+
+
+def _evaluate_rule(rule: Rule, ctx: dict[str, float]) -> tuple[bool, str]:
+    """
+    Evaluate a rule (OR of groups).
+    Returns (matched, reason_string).
+    """
+    if rule.default and not rule.groups:
+        return True, f"default fallback rule '{rule.name}'"
+
+    for i, group in enumerate(rule.groups):
+        matched, descs = _evaluate_group(group, ctx)
+        if matched:
+            reason = f"rule '{rule.name}' (priority {rule.priority}): group {i+1} matched — " + ", ".join(descs)
+            return True, reason
+
+    return False, f"rule '{rule.name}' did not match"
+
+
+# ---------------------------------------------------------------------------
+# Main evaluate function
+# ---------------------------------------------------------------------------
 
 def evaluate(
     system: SystemState,
     weather: WeatherNow,
     forecast: ForecastSummary,
     config: dict,
-    now: datetime | None = None,
-) -> tuple[list[Command], list[SwitchAction]]:
+    now: Optional[datetime] = None,
+) -> EvalResult:
     """
-    Evaluate current state and return:
-      - list[Command]: inverter setting changes (via Solar Assistant MQTT)
-      - list[SwitchAction]: desired switch states (via SwitchManager)
-
-    All thresholds come from config — the logic is threshold-agnostic.
+    Evaluate rules and return an EvalResult with the preset to apply.
+    Does NOT apply the preset — that is the caller's responsibility.
     """
     if now is None:
         now = datetime.now()
 
-    t = config["thresholds"]
-    b = config["battery"]
+    presets = load_presets(config)
+    rules = load_rules(config)
+    ctx = _build_context(system, weather, forecast, now)
 
-    # Convenience aliases
-    soc = system.battery_soc
-    tomorrow_kwh = forecast.tomorrow_yield_kwh
-    tomorrow_rain = forecast.tomorrow_rain_probability
-    raining_now = weather.is_raining
-    current_hour = now.hour
+    logger.info("─── Rule engine eval @ %s ───", now.strftime("%H:%M:%S"))
+    logger.info(
+        "  SOC=%.0f%%  PV=%.0fW  Load=%.0fW  Surplus=%.0fW  Rain=%.1fmm/h  "
+        "Irr=%.0fW/m²  TomorrowFcast=%.1fkWh  RainProb=%.0f%%",
+        ctx["battery_soc"], ctx["pv_power"], ctx["load_power"], ctx["net_surplus"],
+        ctx["rain_rate"], ctx["irradiance"],
+        ctx["forecast_tomorrow_kwh"], ctx["rain_probability_tomorrow"],
+    )
 
-    commands: list[Command] = []
-
-    # -----------------------------------------------------------------------
-    # STEP 1: Determine the desired SOC target (capacity_point_1)
-    # This is the floor the inverter will not discharge below in normal mode.
-    # -----------------------------------------------------------------------
-
-    desired_soc_floor: int
-    soc_floor_reason: str
-
-    if tomorrow_kwh < t["forecast_poor_kwh"]:
-        # Poor solar day tomorrow — protect battery
-        desired_soc_floor = t["soc_target_rainy_day"]
-        soc_floor_reason = f"poor forecast tomorrow ({tomorrow_kwh:.1f} kWh < {t['forecast_poor_kwh']} kWh threshold)"
-
-    elif tomorrow_kwh > t["forecast_good_kwh"] and tomorrow_rain < t["rain_probability_high"]:
-        # Good solar day tomorrow — allow deeper discharge today
-        desired_soc_floor = t["soc_target_good_day"]
-        soc_floor_reason = f"good forecast tomorrow ({tomorrow_kwh:.1f} kWh, rain {tomorrow_rain*100:.0f}%)"
-
-    else:
-        desired_soc_floor = t["soc_target_default"]
-        soc_floor_reason = f"mixed forecast ({tomorrow_kwh:.1f} kWh tomorrow)"
-
-    # Hard floor — never go below config minimum regardless of forecast
-    desired_soc_floor = max(desired_soc_floor, b["min_soc"])
-
-    commands.append(Command(
-        topic_suffix="capacity_point_1",
-        value=str(desired_soc_floor),
-        reason=f"SOC floor set to {desired_soc_floor}% — {soc_floor_reason}",
-    ))
-
-    # -----------------------------------------------------------------------
-    # STEP 2: Determine grid charge current
-    # Positive = charge from grid; 0 = no grid charging
-    # -----------------------------------------------------------------------
-
-    charge_current: int
-    charge_reason: str
-
-    # --- Case A: Currently raining AND SOC is low — emergency grid charge ---
-    if raining_now and soc < t["soc_target_default"]:
-        charge_current = t["grid_charge_max_a"]
-        charge_reason = (
-            f"raining now + SOC {soc:.0f}% below default target "
-            f"{t['soc_target_default']}% — emergency grid charge"
-        )
-
-    # --- Case B: Very poor forecast AND SOC not yet at rainy-day target ---
-    elif tomorrow_kwh < t["forecast_poor_kwh"] and soc < t["soc_target_rainy_day"]:
-        # Scale charge rate: charge harder the further below target we are
-        deficit = t["soc_target_rainy_day"] - soc
-        if deficit > 20:
-            charge_current = t["grid_charge_max_a"]
-        elif deficit > 10:
-            charge_current = t["grid_charge_max_a"] // 2
-        else:
-            charge_current = t["grid_charge_min_a"]
-        charge_reason = (
-            f"poor forecast ({tomorrow_kwh:.1f} kWh) + SOC {soc:.0f}% "
-            f"— need to reach {t['soc_target_rainy_day']}% ({deficit:.0f}% deficit)"
-        )
-
-    # --- Case C: Good forecast — minimal or no grid charging ---
-    elif tomorrow_kwh > t["forecast_good_kwh"] and tomorrow_rain < t["rain_probability_high"]:
-        if soc >= desired_soc_floor:
-            # Battery above floor on a good day — no grid charging needed
-            charge_current = t["grid_charge_off"]
-            charge_reason = (
-                f"good forecast ({tomorrow_kwh:.1f} kWh) + SOC {soc:.0f}% above floor "
-                f"{desired_soc_floor}% — grid charge off"
+    for rule in rules:
+        matched, reason = _evaluate_rule(rule, ctx)
+        if matched:
+            preset_name = rule.preset
+            if preset_name not in presets:
+                logger.error("Rule '%s' references unknown preset '%s'", rule.name, preset_name)
+                continue
+            logger.info("  ✓ Matched: %s → preset '%s'", reason, preset_name)
+            return EvalResult(
+                timestamp=now,
+                matched_rule=rule.name,
+                matched_preset=preset_name,
+                reason=reason,
+                inputs=ctx,
             )
         else:
-            # Still below floor even on good day — light grid charge to get there
-            charge_current = t["grid_charge_min_a"]
-            charge_reason = (
-                f"good forecast but SOC {soc:.0f}% below floor {desired_soc_floor}% "
-                f"— light grid charge"
-            )
+            logger.debug("  ✗ %s", reason)
 
-    # --- Case D: Afternoon on a good day — stop grid charging, let solar finish ---
-    elif current_hour >= 13 and forecast.today_remaining_yield_kwh > 3.0:
-        charge_current = t["grid_charge_off"]
-        charge_reason = (
-            f"afternoon ({current_hour}:00) with {forecast.today_remaining_yield_kwh:.1f} kWh "
-            f"still expected today — grid charge off, let solar top up"
-        )
-
-    # --- Case E: Night-time with poor-ish forecast — moderate grid charge ---
-    elif not _is_daytime(now) and tomorrow_kwh < t["forecast_good_kwh"]:
-        charge_current = int(t["grid_charge_max_a"] * 0.5)
-        charge_reason = (
-            f"night-time + moderate forecast ({tomorrow_kwh:.1f} kWh) "
-            f"— moderate grid charge"
-        )
-
-    # --- Default: do nothing ---
-    else:
-        charge_current = t["grid_charge_off"]
-        charge_reason = (
-            f"default — SOC {soc:.0f}%, forecast {tomorrow_kwh:.1f} kWh, "
-            f"rain {tomorrow_rain*100:.0f}%"
-        )
-
-    commands.append(Command(
-        topic_suffix="max_grid_charge_current",
-        value=str(charge_current),
-        reason=charge_reason,
-    ))
-
-    # -----------------------------------------------------------------------
-    # STEP 3: Switch decisions
-    # Each switch in config.switches gets evaluated here.
-    # The engine produces SwitchAction objects; the caller (main.py) checks
-    # SwitchRunState guards before actually acting.
-    # -----------------------------------------------------------------------
-
-    switch_actions: list[SwitchAction] = []
-
-    for sw_cfg in config.get("switches", []):
-        action = _evaluate_switch(sw_cfg, system, weather, forecast, t, now)
-        if action is not None:
-            switch_actions.append(action)
-
-    # -----------------------------------------------------------------------
-    # STEP 4: Log decision summary
-    # -----------------------------------------------------------------------
-    logger.info("─── Engine decision @ %s ───", now.strftime("%H:%M"))
-    logger.info(
-        "  Inputs: SOC=%.0f%%  PV=%.0fW  Load=%.0fW  Grid=%.0fW  Rain=%s",
-        soc, system.pv_power, system.load_power, system.grid_power,
-        "yes" if raining_now else "no",
+    # No rule matched — this shouldn't happen if a default rule is defined
+    logger.warning("No rule matched — no preset will be applied")
+    return EvalResult(
+        timestamp=now,
+        matched_rule=None,
+        matched_preset=None,
+        reason="No rule matched",
+        inputs=ctx,
     )
-    logger.info(
-        "  Forecast: today remaining=%.1f kWh  tomorrow=%.1f kWh  rain=%.0f%%",
-        forecast.today_remaining_yield_kwh, tomorrow_kwh, tomorrow_rain * 100,
-    )
-    for cmd in commands:
-        logger.info("  → %s", cmd)
-    for action in switch_actions:
-        logger.info("  → %s", action)
-
-    return commands, switch_actions
-
-
-def _evaluate_switch(
-    sw_cfg: dict,
-    system: SystemState,
-    weather: WeatherNow,
-    forecast: ForecastSummary,
-    thresholds: dict,
-    now: datetime,
-) -> SwitchAction | None:
-    """
-    Decide whether a switch should be turned on or off.
-
-    Returns a SwitchAction if the desired state differs from what the
-    engine wants, or None if no action is warranted.
-
-    Each switch config can declare a 'role' which selects the decision
-    logic. Unknown roles default to no action (safe).
-
-    Supported roles:
-        geyser        — heat water using solar surplus
-        pool_pump     — run pump during peak solar
-        generic_load  — any deferrable load
-    """
-    role = sw_cfg.get("role", "generic_load")
-    name = sw_cfg["name"]
-
-    if role == "geyser":
-        return _evaluate_geyser(name, sw_cfg, system, weather, forecast, thresholds, now)
-    elif role == "pool_pump":
-        return _evaluate_pool_pump(name, sw_cfg, system, weather, forecast, thresholds, now)
-    elif role == "generic_load":
-        return _evaluate_generic_load(name, sw_cfg, system, thresholds, now)
-    else:
-        logger.warning("Switch '%s' has unknown role '%s' — no action", name, role)
-        return None
-
-
-def _evaluate_geyser(
-    name: str,
-    sw_cfg: dict,
-    system: SystemState,
-    weather: WeatherNow,
-    forecast: ForecastSummary,
-    thresholds: dict,
-    now: datetime,
-) -> SwitchAction | None:
-    """
-    Geyser heating logic — prioritise solar surplus, protect battery.
-
-    Turn ON when:
-      - Solar surplus > geyser element wattage (configurable)
-      - Battery SOC > minimum SOC for geyser operation
-      - Within allowed time window
-      - Not raining so hard that we expect no surplus
-
-    Turn OFF when:
-      - Surplus drops below threshold
-      - SOC falls below floor
-      - Outside time window
-    """
-    # Switch-specific config with sensible geyser defaults
-    element_watts = sw_cfg.get("element_watts", 2000)       # geyser element size
-    min_soc_to_run = sw_cfg.get("min_soc_to_run", 50)       # don't run below this SOC
-    surplus_margin = sw_cfg.get("surplus_margin_watts", 200) # headroom above element watts
-    window_start = sw_cfg.get("window_start_hour", 9)        # earliest start
-    window_end = sw_cfg.get("window_end_hour", 16)           # latest stop
-
-    current_hour = now.hour
-    surplus = system.net_solar_surplus
-    soc = system.battery_soc
-    required_surplus = element_watts + surplus_margin
-
-    in_window = window_start <= current_hour < window_end
-
-    # Conditions to turn ON
-    want_on = (
-        in_window
-        and surplus > required_surplus
-        and soc > min_soc_to_run
-        and not weather.is_raining
-    )
-
-    # Conditions to turn OFF (any of these)
-    want_off = (
-        not in_window
-        or surplus < (element_watts - surplus_margin)   # clear deficit
-        or soc < thresholds["soc_target_good_day"]      # battery needs protecting
-        or weather.is_raining
-    )
-
-    if want_on:
-        return SwitchAction(
-            switch_name=name,
-            turn_on=True,
-            reason=(
-                f"solar surplus {surplus:.0f}W > {required_surplus}W required, "
-                f"SOC {soc:.0f}% > {min_soc_to_run}%, in window {window_start}–{window_end}h"
-            ),
-        )
-    elif want_off:
-        return SwitchAction(
-            switch_name=name,
-            turn_on=False,
-            reason=(
-                f"surplus {surplus:.0f}W, SOC {soc:.0f}%, "
-                f"window={'yes' if in_window else 'no'}, rain={'yes' if weather.is_raining else 'no'}"
-            ),
-        )
-
-    return None  # No change warranted
-
-
-def _evaluate_pool_pump(
-    name: str,
-    sw_cfg: dict,
-    system: SystemState,
-    weather: WeatherNow,
-    forecast: ForecastSummary,
-    thresholds: dict,
-    now: datetime,
-) -> SwitchAction | None:
-    """
-    Pool pump logic — run during peak solar hours if surplus exists.
-    Simpler than geyser: no element sizing, just run during surplus.
-    """
-    pump_watts = sw_cfg.get("pump_watts", 750)
-    min_soc_to_run = sw_cfg.get("min_soc_to_run", 40)
-    window_start = sw_cfg.get("window_start_hour", 10)
-    window_end = sw_cfg.get("window_end_hour", 15)
-
-    in_window = window_start <= now.hour < window_end
-    surplus = system.net_solar_surplus
-
-    if in_window and surplus > pump_watts and system.battery_soc > min_soc_to_run:
-        return SwitchAction(
-            switch_name=name,
-            turn_on=True,
-            reason=f"solar surplus {surplus:.0f}W > {pump_watts}W pump, in window",
-        )
-    elif not in_window or surplus < (pump_watts * 0.5):
-        return SwitchAction(
-            switch_name=name,
-            turn_on=False,
-            reason=f"surplus {surplus:.0f}W or outside window {window_start}–{window_end}h",
-        )
-    return None
-
-
-def _evaluate_generic_load(
-    name: str,
-    sw_cfg: dict,
-    system: SystemState,
-    thresholds: dict,
-    now: datetime,
-) -> SwitchAction | None:
-    """
-    Generic deferrable load: on during surplus within a time window, off otherwise.
-    """
-    load_watts = sw_cfg.get("load_watts", 500)
-    min_soc_to_run = sw_cfg.get("min_soc_to_run", 50)
-    window_start = sw_cfg.get("window_start_hour", 9)
-    window_end = sw_cfg.get("window_end_hour", 17)
-
-    in_window = window_start <= now.hour < window_end
-    surplus = system.net_solar_surplus
-
-    if in_window and surplus > load_watts and system.battery_soc > min_soc_to_run:
-        return SwitchAction(switch_name=name, turn_on=True,
-            reason=f"surplus {surplus:.0f}W > {load_watts}W load, in window")
-    else:
-        return SwitchAction(switch_name=name, turn_on=False,
-            reason=f"surplus {surplus:.0f}W or outside window")
-
-
-def _is_daytime(now: datetime) -> bool:
-    """Rough daytime check: 07:00 – 18:00 local time."""
-    return time(7, 0) <= now.time() <= time(18, 0)

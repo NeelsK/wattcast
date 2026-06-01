@@ -1,5 +1,5 @@
 """
-models.py — Pure dataclasses representing system state.
+models.py — Pure dataclasses representing system state, presets, and rules.
 No I/O, no MQTT, no HTTP. Fully serialisable and testable.
 """
 
@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+
+# ---------------------------------------------------------------------------
+# Live system state
+# ---------------------------------------------------------------------------
 
 @dataclass
 class SystemState:
@@ -42,6 +46,7 @@ class WeatherNow:
     humidity: float             # %
     wind_speed: float           # m/s
     rain_rate: float            # mm/hr — current rain
+    irradiance_avg_15min: float = 0.0   # W/m² — rolling 15-min average
     timestamp: datetime = field(default_factory=datetime.now)
 
     @property
@@ -73,24 +78,111 @@ class ForecastSummary:
     tomorrow_rain_probability: float    # 0.0–1.0 max hourly probability
     tomorrow_rain_hours: int            # Hours with precipitation > 0.5mm
 
-    fetched_at: datetime = field(default_factory=datetime.now)
+    # Cloud cover (current hour, 0.0–1.0)
+    cloud_cover_now: float = 0.0
 
-    @property
-    def tomorrow_is_good(self) -> bool:
-        """Convenience: check against threshold in engine."""
-        return False  # evaluated in engine with config thresholds
+    fetched_at: datetime = field(default_factory=datetime.now)
 
     @property
     def age_minutes(self) -> float:
         return (datetime.now() - self.fetched_at).total_seconds() / 60
 
 
+# ---------------------------------------------------------------------------
+# Presets — named inverter configurations
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TimeSlot:
+    """One of 6 TOU time slots on the inverter."""
+    time: str           # "HH:MM"
+    capacity: int       # SOC discharge floor % (capacity_point_N)
+    grid_charge: bool   # whether grid charging is enabled for this slot (charge_point_N)
+
+
+@dataclass
+class Preset:
+    """
+    A named inverter configuration — 6 TOU time slots.
+    Applied atomically: all 18 MQTT topics written in one go.
+    """
+    name: str
+    description: str
+    slots: list[TimeSlot]   # exactly 6 entries
+
+    def __post_init__(self):
+        if len(self.slots) != 6:
+            raise ValueError(f"Preset '{self.name}' must have exactly 6 slots, got {len(self.slots)}")
+
+
+# ---------------------------------------------------------------------------
+# Rules — conditions that select a preset
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Condition:
+    """
+    A single comparison: field op value.
+    field: one of the available condition fields (see engine.py)
+    op: ">" | "<" | ">=" | "<=" | "==" | "!="
+    value: float or bool
+    """
+    field: str
+    op: str
+    value: float
+
+
+@dataclass
+class ConditionGroup:
+    """
+    A list of conditions AND'd together.
+    Multiple groups in a rule are OR'd.
+    """
+    conditions: list[Condition]
+
+
+@dataclass
+class Rule:
+    """
+    A prioritised rule that maps a set of conditions to a preset.
+    Rules are evaluated in ascending priority order (lower number = higher priority).
+    First matching rule wins.
+    """
+    name: str
+    priority: int
+    preset: str             # name of preset to apply
+    groups: list[ConditionGroup]  # OR of groups; each group is AND of conditions
+    default: bool = False   # if True, matches when no conditions defined (fallback)
+    description: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Evaluation result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EvalResult:
+    """Result of a single rule engine evaluation cycle."""
+    timestamp: datetime
+    matched_rule: Optional[str]         # rule name that matched
+    matched_preset: Optional[str]       # preset name to apply
+    reason: str                         # human-readable explanation
+    preset_applied: bool = False        # was the preset actually written to inverter?
+    suppressed: bool = False            # suppressed by 30-min cooldown?
+    preset_unchanged: bool = False      # preset same as currently active?
+    inputs: dict = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# MQTT commands (kept for compatibility with mqtt_client)
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Command:
     """A single inverter setting change to publish via MQTT."""
-    topic_suffix: str    # e.g. "max_grid_charge_current" → full topic built by mqtt_client
+    topic_suffix: str    # e.g. "capacity_point_1"
     value: str           # always a string (MQTT payload)
-    reason: str          # human-readable explanation for logging
+    reason: str
 
     def __str__(self) -> str:
         return f"[CMD] {self.topic_suffix} = {self.value!r}  ({self.reason})"
@@ -99,8 +191,8 @@ class Command:
 @dataclass
 class SwitchAction:
     """A desired state change for a named Wi-Fi switch."""
-    switch_name: str     # must match a name in config switches list
-    turn_on: bool        # True = turn on, False = turn off
+    switch_name: str
+    turn_on: bool
     reason: str
 
     def __str__(self) -> str:
