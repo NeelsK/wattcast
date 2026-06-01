@@ -113,7 +113,7 @@ thresholds:
 
   # Forecast thresholds
   forecast_good_kwh: 15.0         # Expected daily yield above which it's a "good" day
-  forecast_poor_kwh: 8.0          # Below which it's a "poor" day
+  forecast_poor_kwh: 5.0          # Below which it's a "poor" day
 
   # Rain probability threshold
   rain_probability_high: 0.60     # 60% chance of rain = treat as rainy
