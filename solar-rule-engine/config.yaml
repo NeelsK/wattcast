@@ -10,7 +10,7 @@ panels:
 
 battery:
   capacity_kwh: 14.4
-  min_soc: 30
+  min_soc: 40
   max_soc: 100
 
 mqtt:
@@ -27,40 +27,151 @@ mariadb:
   port: 3306
   database: "wattcast"
   user: "wattcast"
-  password: ""
-
-switches:
-  - name: geyser
-    type: shelly
-    ip: "10.69.69.43"
-    gen: 2
-    channel: 0
-    username: ""
-    password: ""
-    role: geyser
-    element_watts: 3000
-    min_soc_to_run: 75
-    surplus_margin_watts: 300
-    window_start_hour: 9
-    window_end_hour: 15
-    min_on_minutes: 10
-    max_daily_minutes: 180
-    min_off_minutes: 10
+  password: "Sarferfrika#0815!"
 
 engine:
   eval_interval_seconds: 300
   forecast_refresh_minutes: 60
-  hysteresis_minutes: 15
+  preset_cooldown_minutes: 30
   dry_run: true
   log_level: "INFO"
 
-thresholds:
-  soc_target_rainy_day: 90
-  soc_target_good_day: 50
-  soc_target_default: 70
-  grid_charge_max_a: 40
-  grid_charge_min_a: 10
-  grid_charge_off: 0
-  forecast_good_kwh: 15.0
-  forecast_poor_kwh: 8.0
-  rain_probability_high: 0.60
+presets:
+  default:
+    description: "Balanced winter — protects overnight, frees up during solar hours"
+    slots:
+      - time: "00:00"
+        capacity: 55
+        grid_charge: true
+      - time: "07:00"
+        capacity: 40
+        grid_charge: true
+      - time: "13:00"
+        capacity: 40
+        grid_charge: true
+      - time: "18:00"
+        capacity: 60
+        grid_charge: true
+      - time: "18:00"
+        capacity: 60
+        grid_charge: false
+      - time: "18:00"
+        capacity: 60
+        grid_charge: false
+
+  summer_good:
+    description: "Good solar day — low floors, let solar fill the battery"
+    slots:
+      - time: "00:00"
+        capacity: 40
+        grid_charge: true
+      - time: "07:00"
+        capacity: 40
+        grid_charge: true
+      - time: "13:00"
+        capacity: 40
+        grid_charge: true
+      - time: "18:00"
+        capacity: 50
+        grid_charge: true
+      - time: "18:00"
+        capacity: 50
+        grid_charge: false
+      - time: "18:00"
+        capacity: 50
+        grid_charge: false
+
+  winter_mixed:
+    description: "Mixed forecast — moderate protection"
+    slots:
+      - time: "00:00"
+        capacity: 60
+        grid_charge: true
+      - time: "07:00"
+        capacity: 50
+        grid_charge: true
+      - time: "13:00"
+        capacity: 40
+        grid_charge: true
+      - time: "18:00"
+        capacity: 65
+        grid_charge: true
+      - time: "18:00"
+        capacity: 65
+        grid_charge: false
+      - time: "18:00"
+        capacity: 65
+        grid_charge: false
+
+  storm_protection:
+    description: "Poor forecast or active rain — protect battery"
+    slots:
+      - time: "00:00"
+        capacity: 70
+        grid_charge: true
+      - time: "07:00"
+        capacity: 60
+        grid_charge: true
+      - time: "13:00"
+        capacity: 55
+        grid_charge: true
+      - time: "18:00"
+        capacity: 75
+        grid_charge: true
+      - time: "18:00"
+        capacity: 75
+        grid_charge: false
+      - time: "18:00"
+        capacity: 75
+        grid_charge: false
+
+rules:
+  - name: "Storm Protection"
+    priority: 10
+    preset: storm_protection
+    conditions:
+      any:
+        - all:
+            - field: rain_rate
+              op: ">"
+              value: 2.0
+        - all:
+            - field: rain_probability_tomorrow
+              op: ">"
+              value: 70
+            - field: forecast_tomorrow_kwh
+              op: "<"
+              value: 5.0
+
+  - name: "Good Solar Day"
+    priority: 20
+    preset: summer_good
+    conditions:
+      any:
+        - all:
+            - field: forecast_tomorrow_kwh
+              op: ">"
+              value: 8.5
+            - field: rain_probability_tomorrow
+              op: "<"
+              value: 30
+
+  - name: "Mixed Day"
+    priority: 30
+    preset: winter_mixed
+    conditions:
+      any:
+        - all:
+            - field: forecast_tomorrow_kwh
+              op: ">="
+              value: 3.0
+            - field: forecast_tomorrow_kwh
+              op: "<"
+              value: 8.5
+
+  - name: "Default"
+    priority: 999
+    preset: default
+    default: true
+    conditions:
+      any: []

@@ -173,8 +173,9 @@ def _evaluate_rule(rule: Rule, ctx: dict[str, float]) -> tuple[bool, str]:
     """
     Evaluate a rule (OR of groups).
     Returns (matched, reason_string).
+    A rule with default=True always matches regardless of conditions.
     """
-    if rule.default and not rule.groups:
+    if rule.default:
         return True, f"default fallback rule '{rule.name}'"
 
     for i, group in enumerate(rule.groups):
