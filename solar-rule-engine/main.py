@@ -8,9 +8,12 @@ Systemd service or cron can manage restarts.
 """
 
 import argparse
+import json
 import logging
+import os
 import signal
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -31,6 +34,22 @@ def setup_logging(level: str) -> None:
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
+STATE_FILE = os.getenv("ENGINE_STATE_FILE", "/tmp/wattcast_engine_state.json")
+HISTORY_MAX = 20
+
+
+def write_engine_state(state: dict, history: deque) -> None:
+    """Write current engine state + rolling history to a JSON file for the status API."""
+    try:
+        payload = {**state, "history": list(history)}
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, STATE_FILE)
+    except Exception as e:
+        logging.getLogger("main").warning("Failed to write engine state: %s", e)
 
 
 def load_config(path: str) -> dict:
@@ -63,6 +82,8 @@ def main() -> None:
     forecast_fetched_at: Optional[datetime] = None
     forecast_refresh_td = timedelta(minutes=engine_cfg.get("forecast_refresh_minutes", 60))
     eval_interval = engine_cfg.get("eval_interval_seconds", 300)
+
+    eval_history: deque = deque(maxlen=HISTORY_MAX)
 
     # Graceful shutdown
     running = True
@@ -188,6 +209,45 @@ def main() -> None:
 
             # Log switch states periodically
             switch_registry.log_all()
+
+            # Persist engine state for status dashboard
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            eval_entry = {
+                "timestamp": now_str,
+                "inputs": {
+                    "soc": round(system.battery_soc, 1),
+                    "pv_power": round(system.pv_power, 0),
+                    "load_power": round(system.load_power, 0),
+                    "grid_power": round(system.grid_power, 0),
+                    "battery_power": round(system.battery_power, 0),
+                    "net_surplus": round(system.net_solar_surplus, 0),
+                    "raining": weather.is_raining,
+                    "irradiance": round(weather.irradiance, 0),
+                    "temp": round(weather.temperature, 1),
+                },
+                "forecast": {
+                    "today_remaining_kwh": round(forecast.today_remaining_yield_kwh, 2),
+                    "tomorrow_kwh": round(forecast.tomorrow_yield_kwh, 2),
+                    "tomorrow_rain_pct": round(forecast.tomorrow_rain_probability * 100, 0),
+                    "tomorrow_rain_hours": forecast.tomorrow_rain_hours,
+                    "age_minutes": round(forecast.age_minutes, 1),
+                },
+                "commands": [
+                    {"topic": c.topic_suffix, "value": c.value, "reason": c.reason}
+                    for c in commands
+                ],
+                "switch_actions": [
+                    {"switch": a.switch_name, "turn_on": a.turn_on, "reason": a.reason}
+                    for a in switch_actions
+                ],
+                "approved_commands": [
+                    {"topic": c.topic_suffix, "value": c.value, "reason": c.reason}
+                    for c in approved
+                ],
+                "dry_run": engine_cfg.get("dry_run", True),
+            }
+            eval_history.appendleft(eval_entry)
+            write_engine_state({"last_eval": eval_entry, "dry_run": engine_cfg.get("dry_run", True)}, eval_history)
 
         except Exception as e:
             logger.exception("Unexpected error in main loop: %s", e)

@@ -1,116 +1,66 @@
-# solar-rule-engine config
-# Copy this file per installation and adjust values.
-
-# --- Location ---
 location:
-  latitude: -27.7  # Reitz example; change per installation
+  latitude: -27.7
   longitude: 28.43
   timezone: "Africa/Johannesburg"
 
-# --- Solar panel array ---
 panels:
-  total_kwp: 5.5          # Total installed kWp
-  tilt: 20                # Degrees from horizontal
-  azimuth: 0              # 0 = North (Southern Hemisphere facing north), 90 = East, 270 = West
+  total_kwp: 5.5
+  tilt: 26
+  azimuth: -5
 
-# --- Battery ---
 battery:
-  capacity_kwh: 10.0      # Usable battery capacity
-  min_soc: 20             # Absolute floor - never command below this
+  capacity_kwh: 14.4
+  min_soc: 30
   max_soc: 100
 
-# --- MQTT (your Mosquitto broker, bridged to Solar Assistant) ---
 mqtt:
   host: "localhost"
   port: 1883
-  username: ""            # leave empty if no auth
+  username: ""
   password: ""
-  inverter_id: "inverter_1"   # matches Solar Assistant topic prefix
+  inverter_id: "inverter_1"
 
-# --- Ecowitt weather station ---
-ecowitt:
-  source: "local"         # "local" or "cloud"
-  # For local:
-  station_ip: "192.168.1.x"
-  # For cloud:
-  app_key: ""
-  api_key: ""
-  mac_address: ""         # MAC of the gateway, e.g. "30:C9:22:xx:xx:xx"
+weather_source: "mariadb"
 
-# --- Switches ---
-# Each entry is a Wi-Fi switch the engine can control.
-# Supported types: shelly, http
-# Supported roles: geyser, pool_pump, generic_load
-#
+mariadb:
+  host: "localhost"
+  port: 3306
+  database: "wattcast"
+  user: "wattcast"
+  password: ""
+
 switches:
   - name: geyser
     type: shelly
-    ip: "192.168.1.x"
-    gen: 1                    # 1 = Gen1 (Shelly 1/1PM/Plug), 2 = Gen2 (Shelly Plus/Pro); omit to auto-detect
+    ip: "10.69.69.43"
+    gen: 2
     channel: 0
-    username: ""              # leave empty if no auth configured on the Shelly
+    username: ""
     password: ""
     role: geyser
-    element_watts: 2000       # geyser element size in Watts
-    min_soc_to_run: 50        # don't run geyser below this battery SOC %
-    surplus_margin_watts: 200 # require this much headroom above element_watts before turning on
-    window_start_hour: 9      # earliest hour geyser may run (local time)
-    window_end_hour: 16       # latest hour geyser may run
-    min_on_minutes: 10        # minimum run time before allowing turn-off (protects element)
-    max_daily_minutes: 180    # daily run budget (3 hours)
-    min_off_minutes: 5        # minimum off time before allowing turn-on again
+    element_watts: 3000
+    min_soc_to_run: 75
+    surplus_margin_watts: 300
+    window_start_hour: 9
+    window_end_hour: 15
+    min_on_minutes: 10
+    max_daily_minutes: 180
+    min_off_minutes: 10
 
-  # Uncomment and fill in for additional switches:
-  # - name: pool_pump
-  #   type: shelly
-  #   ip: "192.168.1.y"
-  #   gen: 2
-  #   channel: 0
-  #   role: pool_pump
-  #   pump_watts: 750
-  #   min_soc_to_run: 40
-  #   window_start_hour: 10
-  #   window_end_hour: 15
-  #   min_on_minutes: 30
-  #   max_daily_minutes: 240
-  #   min_off_minutes: 10
-
-  # - name: workshop_ac
-  #   type: http
-  #   url_on:  "http://192.168.1.z/cm?cmnd=Power%20On"   # Tasmota example
-  #   url_off: "http://192.168.1.z/cm?cmnd=Power%20Off"
-  #   url_status: "http://192.168.1.z/cm?cmnd=Power"
-  #   status_on_value: "ON"
-  #   role: generic_load
-  #   load_watts: 1500
-  #   min_soc_to_run: 60
-  #   window_start_hour: 9
-  #   window_end_hour: 17
-  #   min_on_minutes: 15
-  #   max_daily_minutes: 120
-  #   min_off_minutes: 10
 engine:
-  eval_interval_seconds: 300      # How often to run the decision loop (5 min)
-  forecast_refresh_minutes: 60    # How often to refresh Open-Meteo forecast
-  hysteresis_minutes: 15          # Minimum time between same-topic changes
-  dry_run: true                   # true = log commands only, do not publish to inverter
-  log_level: "INFO"               # DEBUG, INFO, WARNING
+  eval_interval_seconds: 300
+  forecast_refresh_minutes: 60
+  hysteresis_minutes: 15
+  dry_run: true
+  log_level: "INFO"
 
-# --- Thresholds (tune per site) ---
 thresholds:
-  # SOC targets that rules may command (within battery.min_soc / battery.max_soc)
-  soc_target_rainy_day: 90        # Charge to this when bad forecast
-  soc_target_good_day: 50         # Allow discharge to this when good forecast
+  soc_target_rainy_day: 90
+  soc_target_good_day: 50
   soc_target_default: 70
-
-  # Grid charge current limits (Amps) - inverter-specific max
-  grid_charge_max_a: 50
+  grid_charge_max_a: 40
   grid_charge_min_a: 10
   grid_charge_off: 0
-
-  # Forecast thresholds
-  forecast_good_kwh: 15.0         # Expected daily yield above which it's a "good" day
-  forecast_poor_kwh: 8.0          # Below which it's a "poor" day
-
-  # Rain probability threshold
-  rain_probability_high: 0.60     # 60% chance of rain = treat as rainy
+  forecast_good_kwh: 15.0
+  forecast_poor_kwh: 8.0
+  rain_probability_high: 0.60

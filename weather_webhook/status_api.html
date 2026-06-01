@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WattCast Status</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f4f6f9;
+    color: #1a1a2e;
+    padding: 16px;
+    font-size: 14px;
+  }
+  h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 13px; font-weight: 700; margin: 16px 0 10px; color: #444; text-transform: uppercase; letter-spacing: 0.05em; }
+  .subtitle { font-size: 12px; color: #666; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .card { background: #fff; border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .card.full { grid-column: 1 / -1; }
+  .card-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #888; margin-bottom: 10px; }
+  .big-val { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; }
+  .big-label { font-size: 12px; color: #888; margin-top: 2px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+  .row:last-child { border-bottom: none; }
+  .row-label { color: #555; }
+  .row-val { font-weight: 600; text-align: right; max-width: 60%; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .pill.green  { background: #e6f9ed; color: #1a7f3c; }
+  .pill.red    { background: #fdecea; color: #c0392b; }
+  .pill.yellow { background: #fef9e7; color: #b7770d; }
+  .pill.blue   { background: #e8f0fe; color: #1a56db; }
+  .pill.grey   { background: #f0f0f0; color: #666; }
+  .svc-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+  .svc-row:last-child { border-bottom: none; }
+  .svc-name { font-weight: 500; }
+  .svc-since { font-size: 11px; color: #aaa; margin-top: 1px; }
+  .error-banner { background: #fdecea; color: #c0392b; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; display: none; }
+  .stale-badge { font-size: 10px; background: #fef9e7; color: #b7770d; padding: 1px 6px; border-radius: 10px; margin-left: 6px; }
+  .refresh-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .last-refresh { font-size: 11px; color: #aaa; }
+  button { font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid #d0d5dd; background: #fff; color: #333; cursor: pointer; }
+  button:hover { background: #f5f5f5; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #555; border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 4px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .bar-wrap { background: #f0f0f0; border-radius: 6px; height: 10px; margin-top: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; transition: width 0.4s; }
+  .bar-soc { background: linear-gradient(90deg, #f39c12, #2ecc71); }
+  .bar-pv  { background: linear-gradient(90deg, #f9ca24, #f0932b); }
+
+  /* Engine section */
+  .reason-text { font-size: 12px; color: #555; line-height: 1.4; }
+  .cmd-row { padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+  .cmd-row:last-child { border-bottom: none; }
+  .cmd-topic { font-size: 11px; font-weight: 700; color: #1a56db; font-family: monospace; }
+  .cmd-value { font-size: 13px; font-weight: 700; }
+  .cmd-reason { font-size: 11px; color: #666; margin-top: 2px; }
+  .history-row { padding: 6px 0; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+  .history-row:last-child { border-bottom: none; }
+  .history-row:hover { background: #f9f9f9; }
+  .history-ts { font-size: 11px; color: #aaa; margin-bottom: 3px; }
+  .history-summary { font-size: 12px; }
+  .history-detail { font-size: 11px; color: #666; margin-top: 4px; display: none; line-height: 1.5; }
+  .history-row.expanded .history-detail { display: block; }
+  .dry-run-banner { background: #fef9e7; color: #b7770d; border-radius: 8px; padding: 6px 12px; margin-bottom: 10px; font-size: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>⚡ WattCast</h1>
+<div class="subtitle">Live status — 10.69.69.45</div>
+
+<div class="error-banner" id="errBanner"></div>
+
+<div class="refresh-row">
+  <span class="last-refresh" id="lastRefresh">Loading…</span>
+  <button onclick="loadAll()"><span id="spinnerEl" style="display:none" class="spinner"></span>Refresh</button>
+</div>
+
+<div id="dashboard" style="display:none">
+
+  <h2>⚡ System</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">☀️ Solar <span id="solarStale" class="stale-badge" style="display:none">STALE</span></div>
+      <div class="big-val" id="pvPower">—</div>
+      <div class="big-label">PV Power</div>
+      <div class="bar-wrap"><div class="bar-fill bar-pv" id="pvBar" style="width:0%"></div></div>
+      <div style="height:10px"></div>
+      <div class="row"><span class="row-label">Battery SOC</span><span class="row-val" id="soc">—</span></div>
+      <div class="bar-wrap"><div class="bar-fill bar-soc" id="socBar" style="width:0%"></div></div>
+      <div style="height:6px"></div>
+      <div class="row"><span class="row-label">Battery</span><span class="row-val" id="batPower">—</span></div>
+      <div class="row"><span class="row-label">Load</span><span class="row-val" id="loadPower">—</span></div>
+      <div class="row"><span class="row-label">Grid</span><span class="row-val" id="gridPower">—</span></div>
+      <div class="row"><span class="row-label">Gen today</span><span class="row-val" id="genToday">—</span></div>
+      <div class="row"><span class="row-label">Last reading</span><span class="row-val" id="solarTs">—</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🌤 Weather <span id="weatherStale" class="stale-badge" style="display:none">STALE</span></div>
+      <div class="big-val" id="temp">—</div>
+      <div class="big-label">Outdoor temp</div>
+      <div style="height:10px"></div>
+      <div class="row"><span class="row-label">Humidity</span><span class="row-val" id="humidity">—</span></div>
+      <div class="row"><span class="row-label">Solar irradiance</span><span class="row-val" id="irradiance">—</span></div>
+      <div class="row"><span class="row-label">Wind</span><span class="row-val" id="wind">—</span></div>
+      <div class="row"><span class="row-label">Rain today</span><span class="row-val" id="rain">—</span></div>
+      <div class="row"><span class="row-label">Pressure</span><span class="row-val" id="pressure">—</span></div>
+      <div class="row"><span class="row-label">Last reading</span><span class="row-val" id="weatherTs">—</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🚿 Geyser</div>
+      <div id="geyserState" class="big-val">—</div>
+      <div class="big-label">Switch state</div>
+      <div style="height:10px"></div>
+      <div class="row"><span class="row-label">Power draw</span><span class="row-val" id="geyserPower">—</span></div>
+      <div class="row"><span class="row-label">Energy today</span><span class="row-val" id="geyserEnergy">—</span></div>
+      <div class="row"><span class="row-label">Controller temp</span><span class="row-val" id="geyserTemp">—</span></div>
+      <div class="row"><span class="row-label">Reachable</span><span class="row-val" id="geyserReach">—</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🔧 Services</div>
+      <div id="serviceList"></div>
+    </div>
+  </div>
+
+  <h2>🤖 Rule Engine</h2>
+  <div id="engineSection">
+    <div class="card full" style="color:#aaa; font-size:13px;">No engine data yet</div>
+  </div>
+
+</div>
+
+<script>
+function fmt(v, unit, decimals=0) {
+  if (v === null || v === undefined) return '—';
+  return Number(v).toFixed(decimals) + unit;
+}
+function fmtPower(w) {
+  if (w === null || w === undefined) return '—';
+  return (w > 0 ? '+' : '') + w + ' W';
+}
+function ageStr(secs) {
+  if (!secs && secs !== 0) return '';
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.round(secs/60) + 'm ago';
+  return Math.round(secs/3600) + 'h ago';
+}
+function pill(text, colour) {
+  return `<span class="pill ${colour}">${text}</span>`;
+}
+function set(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+function renderStatus(d) {
+  const s = d.solar?.data;
+  document.getElementById('solarStale').style.display = d.solar?.stale ? 'inline' : 'none';
+  if (s) {
+    set('pvPower', fmt(s.pv_power, ' W'));
+    set('soc', fmt(s.battery_soc, '%'));
+    set('batPower', fmtPower(s.battery_power));
+    set('loadPower', fmt(s.load_power, ' W'));
+    set('gridPower', (s.grid_connected ? '' : '<span style="color:#c0392b">⚠ GRID OFF </span>') + fmtPower(s.grid_power));
+    set('genToday', fmt(s.generation_today, ' kWh', 2));
+    set('solarTs', ageStr(d.solar.age_seconds));
+    document.getElementById('pvBar').style.width = Math.min(100, (s.pv_power||0)/6000*100) + '%';
+    document.getElementById('socBar').style.width = (s.battery_soc||0) + '%';
+  }
+
+  const w = d.weather?.data;
+  document.getElementById('weatherStale').style.display = d.weather?.stale ? 'inline' : 'none';
+  if (w) {
+    set('temp', fmt(w.temp_outdoor, '°C', 1));
+    set('humidity', fmt(w.humidity_outdoor, '%', 0));
+    set('irradiance', fmt(w.solar_radiation, ' W/m²', 0));
+    set('wind', fmt(w.wind_speed, ' km/h', 1) + (w.wind_gust ? ' (gust ' + fmt(w.wind_gust,'',1) + ')' : ''));
+    set('rain', fmt(w.rain_daily, ' mm', 1));
+    set('pressure', fmt(w.pressure_relative, ' hPa', 1));
+    set('weatherTs', ageStr(d.weather.age_seconds));
+  }
+
+  const g = d.geyser;
+  if (g.reachable) {
+    set('geyserState', g.on ? '<span style="color:#1a7f3c">ON</span>' : '<span style="color:#555">OFF</span>');
+    set('geyserPower', fmt(g.power_w, ' W', 0));
+    set('geyserEnergy', fmt(g.energy_kwh, ' kWh', 3));
+    set('geyserTemp', fmt(g.temp_c, '°C', 1));
+    set('geyserReach', pill('Online', 'green'));
+  } else {
+    set('geyserState', '—');
+    set('geyserReach', pill('Unreachable', 'red'));
+    set('geyserPower', '—'); set('geyserEnergy', '—'); set('geyserTemp', '—');
+  }
+
+  const names = {'mqtt_bridge':'MQTT Bridge','weather_webhook':'Weather Webhook','solar-rule-engine':'Rule Engine'};
+  let html = '';
+  for (const [key, label] of Object.entries(names)) {
+    const svc = d.services?.[key];
+    const colour = svc?.active === 'active' ? 'green' : svc?.active === 'activating' ? 'yellow' : 'red';
+    html += `<div class="svc-row">
+      <div><div class="svc-name">${label}</div><div class="svc-since">${svc?.since||''}</div></div>
+      ${pill(svc?.active||'unknown', colour)}
+    </div>`;
+  }
+  set('serviceList', html);
+}
+
+function renderEngine(e) {
+  const el = document.getElementById('engineSection');
+  if (!e || e.error) {
+    el.innerHTML = `<div class="card full" style="color:#aaa;font-size:13px;">${e?.error || 'No engine data'}</div>`;
+    return;
+  }
+
+  const last = e.last_eval;
+  const dryRun = e.dry_run;
+  const history = e.history || [];
+
+  // Commands
+  let cmdHtml = '';
+  for (const cmd of (last?.commands || [])) {
+    const approved = (last?.approved_commands || []).find(a => a.topic === cmd.topic);
+    const sentBadge = dryRun
+      ? pill('DRY RUN', 'yellow')
+      : (approved ? pill('SENT', 'green') : pill('SUPPRESSED', 'grey'));
+    cmdHtml += `<div class="cmd-row">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="cmd-topic">${cmd.topic}</span>
+        <span style="display:flex;gap:6px;align-items:center;">${sentBadge} <span class="cmd-value">${cmd.value}</span></span>
+      </div>
+      <div class="cmd-reason">${cmd.reason}</div>
+    </div>`;
+  }
+
+  // Switch actions
+  let switchHtml = '';
+  for (const action of (last?.switch_actions || [])) {
+    const statePill = action.turn_on ? pill('→ ON', 'green') : pill('→ OFF', 'grey');
+    switchHtml += `<div class="cmd-row">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="cmd-topic">${action.switch}</span>
+        <span style="display:flex;gap:6px;align-items:center;">${dryRun ? pill('DRY RUN','yellow') : ''} ${statePill}</span>
+      </div>
+      <div class="cmd-reason">${action.reason}</div>
+    </div>`;
+  }
+
+  // History
+  let histHtml = '';
+  for (const h of history) {
+    const cmds = (h.commands||[]).map(c => `${c.topic}=${c.value}`).join(', ');
+    const switches = (h.switch_actions||[]).map(a => `${a.switch}→${a.turn_on?'ON':'OFF'}`).join(', ');
+    const summary = [cmds, switches].filter(Boolean).join(' | ') || 'no actions';
+    histHtml += `<div class="history-row" onclick="this.classList.toggle('expanded')">
+      <div class="history-ts">${h.timestamp}</div>
+      <div class="history-summary">SOC ${h.inputs?.soc}%  PV ${h.inputs?.pv_power}W  Surplus ${h.inputs?.net_surplus}W  ${h.inputs?.raining ? '🌧' : '☀️'}</div>
+      <div class="history-detail">
+        <b>Commands:</b> ${(h.commands||[]).map(c=>`${c.topic}=${c.value} — ${c.reason}`).join('<br>')}<br>
+        <b>Switches:</b> ${(h.switch_actions||[]).map(a=>`${a.switch}→${a.turn_on?'ON':'OFF'} — ${a.reason}`).join('<br>') || 'none'}<br>
+        <b>Forecast:</b> today remaining ${h.forecast?.today_remaining_kwh} kWh, tomorrow ${h.forecast?.tomorrow_kwh} kWh (rain ${h.forecast?.tomorrow_rain_pct}%)
+      </div>
+    </div>`;
+  }
+
+  const inp = last?.inputs || {};
+  const fc = last?.forecast || {};
+
+  el.innerHTML = `
+    ${dryRun ? '<div class="dry-run-banner">⚠ DRY RUN MODE — commands are evaluated but not sent to inverter</div>' : ''}
+    <div class="grid" style="margin-bottom:12px;">
+      <div class="card">
+        <div class="card-title">Last eval — ${last?.timestamp || '—'}</div>
+        <div class="row"><span class="row-label">SOC</span><span class="row-val">${fmt(inp.soc,'%',1)}</span></div>
+        <div class="row"><span class="row-label">PV</span><span class="row-val">${fmt(inp.pv_power,' W')}</span></div>
+        <div class="row"><span class="row-label">Net surplus</span><span class="row-val">${fmt(inp.net_surplus,' W')}</span></div>
+        <div class="row"><span class="row-label">Raining</span><span class="row-val">${inp.raining ? '🌧 Yes' : '☀️ No'}</span></div>
+        <div class="row"><span class="row-label">Irradiance</span><span class="row-val">${fmt(inp.irradiance,' W/m²')}</span></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Forecast (age: ${fc.age_minutes} min)</div>
+        <div class="row"><span class="row-label">Today remaining</span><span class="row-val">${fmt(fc.today_remaining_kwh,' kWh',2)}</span></div>
+        <div class="row"><span class="row-label">Tomorrow yield</span><span class="row-val">${fmt(fc.tomorrow_kwh,' kWh',2)}</span></div>
+        <div class="row"><span class="row-label">Tomorrow rain</span><span class="row-val">${fmt(fc.tomorrow_rain_pct,'%')} (${fc.tomorrow_rain_hours||0}h)</span></div>
+      </div>
+    </div>
+    <div class="card full" style="margin-bottom:12px;">
+      <div class="card-title">Inverter commands</div>
+      ${cmdHtml || '<div style="color:#aaa;font-size:12px;">No commands</div>'}
+    </div>
+    <div class="card full" style="margin-bottom:12px;">
+      <div class="card-title">Switch actions</div>
+      ${switchHtml || '<div style="color:#aaa;font-size:12px;">No switch actions</div>'}
+    </div>
+    <div class="card full">
+      <div class="card-title">Eval history (click to expand)</div>
+      ${histHtml || '<div style="color:#aaa;font-size:12px;">No history yet</div>'}
+    </div>
+  `;
+}
+
+async function loadAll() {
+  document.getElementById('spinnerEl').style.display = 'inline-block';
+  document.getElementById('errBanner').style.display = 'none';
+  try {
+    const [statusRes, engineRes] = await Promise.all([
+      fetch('/status', {cache: 'no-store'}),
+      fetch('/engine', {cache: 'no-store'}),
+    ]);
+    if (!statusRes.ok) throw new Error('HTTP ' + statusRes.status);
+    const statusData = await statusRes.json();
+    const engineData = engineRes.ok ? await engineRes.json() : {error: 'Engine data not available'};
+
+    document.getElementById('dashboard').style.display = 'block';
+    document.getElementById('lastRefresh').textContent = 'Updated ' + new Date().toLocaleTimeString('en-ZA');
+    renderStatus(statusData);
+    renderEngine(engineData);
+  } catch (e) {
+    const b = document.getElementById('errBanner');
+    b.style.display = 'block';
+    b.textContent = 'Cannot reach Pi — ' + e.message;
+  } finally {
+    document.getElementById('spinnerEl').style.display = 'none';
+  }
+}
+
+loadAll();
+setInterval(loadAll, 60000);
+</script>
+</body>
+</html>

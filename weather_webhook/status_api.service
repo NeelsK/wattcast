@@ -1,0 +1,34 @@
+[Unit]
+Description=WattCast Status API
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=wattcast
+WorkingDirectory=/home/wattcast/wattcast/weather_webhook
+ExecStart=/home/wattcast/wattcast/weather_webhook/venv/bin/python status_api.py
+Restart=always
+RestartSec=10
+
+# Database
+Environment="DB_HOST=localhost"
+Environment="DB_PORT=3306"
+Environment="DB_NAME=wattcast"
+Environment="DB_USER=wattcast"
+Environment="DB_PASS=CHANGE_ME"
+
+# Geyser Shelly Gen2
+Environment="GEYSER_IP=10.69.69.43"
+Environment="GEYSER_PASS=CHANGE_ME"
+Environment="GEYSER_TIMEOUT=3"
+
+Environment="PORT=5001"
+Environment="LOG_LEVEL=INFO"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=status_api
+
+[Install]
+WantedBy=multi-user.target
