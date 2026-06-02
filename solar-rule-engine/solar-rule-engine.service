@@ -17,10 +17,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=wattcast
-WorkingDirectory=/home/wattcast/solar-rule-engine
-ExecStart=/home/wattcast/solar-rule-engine/venv/bin/python main.py --config config.yaml
+WorkingDirectory=/home/wattcast/wattcast/solar-rule-engine
+ExecStart=/usr/bin/python3 main.py --config config.yaml
 Restart=on-failure
 RestartSec=30
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
 

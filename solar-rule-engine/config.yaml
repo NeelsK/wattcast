@@ -14,7 +14,7 @@ battery:
   max_soc: 100
 
 mqtt:
-  host: "localhost"
+  host: "10.69.69.31"
   port: 1883
   username: ""
   password: ""
@@ -150,7 +150,7 @@ rules:
       any:
         - all:
             - field: forecast_tomorrow_kwh
-              op: ">"
+              op: ">="
               value: 8.5
             - field: rain_probability_tomorrow
               op: "<"

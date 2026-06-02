@@ -223,81 +223,61 @@ function renderEngine(e) {
   const last = e.last_eval;
   const dryRun = e.dry_run;
   const history = e.history || [];
+  const inp = last?.inputs || {};
 
-  // Commands
-  let cmdHtml = '';
-  for (const cmd of (last?.commands || [])) {
-    const approved = (last?.approved_commands || []).find(a => a.topic === cmd.topic);
-    const sentBadge = dryRun
-      ? pill('DRY RUN', 'yellow')
-      : (approved ? pill('SENT', 'green') : pill('SUPPRESSED', 'grey'));
-    cmdHtml += `<div class="cmd-row">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span class="cmd-topic">${cmd.topic}</span>
-        <span style="display:flex;gap:6px;align-items:center;">${sentBadge} <span class="cmd-value">${cmd.value}</span></span>
-      </div>
-      <div class="cmd-reason">${cmd.reason}</div>
-    </div>`;
-  }
+  // Status badges
+  const presetBadge = e.active_preset
+    ? pill(e.active_preset, 'blue')
+    : pill('none', 'grey');
+  const appliedBadge = last?.preset_applied ? pill('APPLIED', 'green')
+    : last?.suppressed ? pill('COOLDOWN', 'yellow')
+    : last?.preset_unchanged ? pill('UNCHANGED', 'grey')
+    : pill('SKIPPED', 'grey');
 
-  // Switch actions
-  let switchHtml = '';
-  for (const action of (last?.switch_actions || [])) {
-    const statePill = action.turn_on ? pill('→ ON', 'green') : pill('→ OFF', 'grey');
-    switchHtml += `<div class="cmd-row">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span class="cmd-topic">${action.switch}</span>
-        <span style="display:flex;gap:6px;align-items:center;">${dryRun ? pill('DRY RUN','yellow') : ''} ${statePill}</span>
-      </div>
-      <div class="cmd-reason">${action.reason}</div>
-    </div>`;
-  }
-
-  // History
+  // History rows
   let histHtml = '';
   for (const h of history) {
-    const cmds = (h.commands||[]).map(c => `${c.topic}=${c.value}`).join(', ');
-    const switches = (h.switch_actions||[]).map(a => `${a.switch}→${a.turn_on?'ON':'OFF'}`).join(', ');
-    const summary = [cmds, switches].filter(Boolean).join(' | ') || 'no actions';
+    const i = h.inputs || {};
+    const isRaining = (i.rain_rate || 0) > 0.2;
+    const statusBadge = h.applied ? pill('APPLIED','green')
+      : h.suppressed ? pill('COOLDOWN','yellow')
+      : h.unchanged ? pill('UNCHANGED','grey')
+      : pill('SKIPPED','grey');
     histHtml += `<div class="history-row" onclick="this.classList.toggle('expanded')">
-      <div class="history-ts">${h.timestamp}</div>
-      <div class="history-summary">SOC ${h.inputs?.soc}%  PV ${h.inputs?.pv_power}W  Surplus ${h.inputs?.net_surplus}W  ${h.inputs?.raining ? '🌧' : '☀️'}</div>
+      <div class="history-ts">${h.timestamp} — <b>${h.matched_preset || '—'}</b> ${statusBadge}</div>
+      <div class="history-summary">SOC ${i.battery_soc}%  PV ${i.pv_power}W  Surplus ${i.net_surplus}W  ${isRaining ? '🌧' : '☀️'}</div>
       <div class="history-detail">
-        <b>Commands:</b> ${(h.commands||[]).map(c=>`${c.topic}=${c.value} — ${c.reason}`).join('<br>')}<br>
-        <b>Switches:</b> ${(h.switch_actions||[]).map(a=>`${a.switch}→${a.turn_on?'ON':'OFF'} — ${a.reason}`).join('<br>') || 'none'}<br>
-        <b>Forecast:</b> today remaining ${h.forecast?.today_remaining_kwh} kWh, tomorrow ${h.forecast?.tomorrow_kwh} kWh (rain ${h.forecast?.tomorrow_rain_pct}%)
+        <b>Rule:</b> ${h.matched_rule || '—'}<br>
+        <b>Reason:</b> ${h.reason || '—'}<br>
+        <b>Forecast:</b> today ${fmt(i.forecast_today_remaining_kwh,' kWh',1)}  tomorrow ${fmt(i.forecast_tomorrow_kwh,' kWh',1)}  rain ${fmt(i.rain_probability_tomorrow,'%',0)}
       </div>
     </div>`;
   }
 
-  const inp = last?.inputs || {};
-  const fc = last?.forecast || {};
-
   el.innerHTML = `
-    ${dryRun ? '<div class="dry-run-banner">⚠ DRY RUN MODE — commands are evaluated but not sent to inverter</div>' : ''}
+    ${dryRun ? '<div class="dry-run-banner">⚠ DRY RUN MODE — preset changes logged but NOT sent to inverter</div>' : ''}
     <div class="grid" style="margin-bottom:12px;">
       <div class="card">
         <div class="card-title">Last eval — ${last?.timestamp || '—'}</div>
-        <div class="row"><span class="row-label">SOC</span><span class="row-val">${fmt(inp.soc,'%',1)}</span></div>
+        <div class="row"><span class="row-label">Active preset</span><span class="row-val">${presetBadge} ${appliedBadge}</span></div>
+        <div class="row"><span class="row-label">Matched rule</span><span class="row-val">${last?.matched_rule || '—'}</span></div>
+        <div class="row"><span class="row-label">SOC</span><span class="row-val">${fmt(inp.battery_soc,'%',1)}</span></div>
         <div class="row"><span class="row-label">PV</span><span class="row-val">${fmt(inp.pv_power,' W')}</span></div>
         <div class="row"><span class="row-label">Net surplus</span><span class="row-val">${fmt(inp.net_surplus,' W')}</span></div>
-        <div class="row"><span class="row-label">Raining</span><span class="row-val">${inp.raining ? '🌧 Yes' : '☀️ No'}</span></div>
+        <div class="row"><span class="row-label">Raining</span><span class="row-val">${(inp.rain_rate||0) > 0.2 ? '🌧 Yes' : '☀️ No'}</span></div>
         <div class="row"><span class="row-label">Irradiance</span><span class="row-val">${fmt(inp.irradiance,' W/m²')}</span></div>
       </div>
       <div class="card">
-        <div class="card-title">Forecast (age: ${fc.age_minutes} min)</div>
-        <div class="row"><span class="row-label">Today remaining</span><span class="row-val">${fmt(fc.today_remaining_kwh,' kWh',2)}</span></div>
-        <div class="row"><span class="row-label">Tomorrow yield</span><span class="row-val">${fmt(fc.tomorrow_kwh,' kWh',2)}</span></div>
-        <div class="row"><span class="row-label">Tomorrow rain</span><span class="row-val">${fmt(fc.tomorrow_rain_pct,'%')} (${fc.tomorrow_rain_hours||0}h)</span></div>
+        <div class="card-title">Forecast inputs</div>
+        <div class="row"><span class="row-label">Today remaining</span><span class="row-val">${fmt(inp.forecast_today_remaining_kwh,' kWh',1)}</span></div>
+        <div class="row"><span class="row-label">Tomorrow yield</span><span class="row-val">${fmt(inp.forecast_tomorrow_kwh,' kWh',1)}</span></div>
+        <div class="row"><span class="row-label">Tomorrow rain prob</span><span class="row-val">${fmt(inp.rain_probability_tomorrow,'%',0)}</span></div>
+        <div class="row"><span class="row-label">Cloud cover</span><span class="row-val">${fmt(inp.cloud_cover_now,'%',0)}</span></div>
+        <div class="row" style="margin-top:8px;border-top:2px solid #eee;padding-top:8px;">
+          <span class="row-label" style="font-size:11px;color:#aaa;">Reason</span>
+        </div>
+        <div style="font-size:11px;color:#555;line-height:1.5;margin-top:4px;">${last?.reason || '—'}</div>
       </div>
-    </div>
-    <div class="card full" style="margin-bottom:12px;">
-      <div class="card-title">Inverter commands</div>
-      ${cmdHtml || '<div style="color:#aaa;font-size:12px;">No commands</div>'}
-    </div>
-    <div class="card full" style="margin-bottom:12px;">
-      <div class="card-title">Switch actions</div>
-      ${switchHtml || '<div style="color:#aaa;font-size:12px;">No switch actions</div>'}
     </div>
     <div class="card full">
       <div class="card-title">Eval history (click to expand)</div>

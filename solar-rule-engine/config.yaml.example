@@ -234,7 +234,7 @@ rules:
       any:
         - all:
             - field: forecast_tomorrow_kwh
-              op: ">"
+              op: ">="
               value: 8.5
             - field: rain_probability_tomorrow
               op: "<"

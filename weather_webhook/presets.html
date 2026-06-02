@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WattCast — Presets</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f6f9; color: #1a1a2e; font-size: 14px; }
+
+  /* Nav */
+  nav { background: #1a1a2e; color: #fff; display: flex; align-items: center; gap: 0; padding: 0 20px; height: 48px; }
+  nav .brand { font-weight: 700; font-size: 16px; margin-right: 24px; color: #fff; text-decoration: none; }
+  nav a { color: #aab; text-decoration: none; padding: 0 14px; height: 48px; display: flex; align-items: center; font-size: 13px; }
+  nav a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+  nav a.active { color: #fff; border-bottom: 2px solid #4f8ef7; }
+
+  .page { padding: 20px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 12px; color: #888; margin-bottom: 20px; }
+
+  /* Preset list */
+  .preset-list { display: flex; flex-direction: column; gap: 12px; }
+  .preset-card { background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; }
+  .preset-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; cursor: pointer; user-select: none; }
+  .preset-header:hover { background: #f9f9f9; }
+  .preset-name { font-weight: 700; font-size: 15px; }
+  .preset-desc { font-size: 12px; color: #888; margin-top: 2px; }
+  .preset-actions { display: flex; gap: 8px; align-items: center; }
+  .chevron { font-size: 12px; color: #aaa; transition: transform 0.2s; }
+  .preset-card.open .chevron { transform: rotate(180deg); }
+
+  /* Slot table */
+  .preset-body { display: none; padding: 0 16px 16px; }
+  .preset-card.open .preset-body { display: block; }
+  .slot-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  .slot-table th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #888; text-align: left; padding: 6px 8px; border-bottom: 2px solid #f0f0f0; }
+  .slot-table td { padding: 6px 8px; border-bottom: 1px solid #f5f5f5; vertical-align: middle; }
+  .slot-table tr:last-child td { border-bottom: none; }
+  .slot-num { font-size: 11px; color: #aaa; font-weight: 600; width: 30px; }
+
+  input[type="time"], input[type="number"] {
+    border: 1px solid #d0d5dd; border-radius: 6px; padding: 4px 8px;
+    font-size: 13px; font-family: inherit; background: #fff;
+    width: 100%;
+  }
+  input[type="number"] { width: 70px; }
+  input:focus { outline: none; border-color: #4f8ef7; box-shadow: 0 0 0 2px rgba(79,142,247,0.15); }
+
+  .toggle-wrap { display: flex; align-items: center; gap: 6px; }
+  .toggle { position: relative; width: 36px; height: 20px; cursor: pointer; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track { position: absolute; inset: 0; background: #d0d5dd; border-radius: 20px; transition: background 0.2s; }
+  .toggle input:checked + .toggle-track { background: #4f8ef7; }
+  .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .toggle input:checked ~ .toggle-thumb { transform: translateX(16px); }
+  .toggle-label { font-size: 12px; color: #555; }
+
+  /* Buttons */
+  .btn { padding: 6px 14px; border-radius: 6px; border: none; font-size: 13px; font-family: inherit; cursor: pointer; font-weight: 500; }
+  .btn-primary { background: #4f8ef7; color: #fff; }
+  .btn-primary:hover { background: #3a7de0; }
+  .btn-danger  { background: #fdecea; color: #c0392b; border: 1px solid #f5c6c2; }
+  .btn-danger:hover  { background: #fad4d0; }
+  .btn-ghost  { background: #fff; color: #555; border: 1px solid #d0d5dd; }
+  .btn-ghost:hover  { background: #f5f5f5; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  .save-row { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid #f0f0f0; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #1a1a2e; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 999; }
+  .toast.show { opacity: 1; }
+  .toast.error { background: #c0392b; }
+
+  .add-preset-row { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #e8f0fe; color: #1a56db; margin-left: 8px; }
+  .dirty-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #f39c12; margin-left: 6px; vertical-align: middle; display: none; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="/">⚡ WattCast</a>
+  <a href="/">Dashboard</a>
+  <a href="/presets" class="active">Presets</a>
+  <a href="/rules">Rules</a>
+  <a href="/geyser">Geyser</a>
+  <a href="/settings">Settings</a>
+</nav>
+
+<div class="page">
+  <h1>Inverter Presets</h1>
+  <p class="subtitle">Define TOU time slot configurations. The rule engine applies the matching preset every 5 minutes.</p>
+
+  <div class="add-preset-row">
+    <button class="btn btn-primary" onclick="newPreset()">+ New Preset</button>
+  </div>
+
+  <div class="preset-list" id="presetList">
+    <div style="color:#aaa;font-size:13px;padding:20px;text-align:center;">Loading…</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const FIELDS = ['time','capacity','grid_charge'];
+let presets = [];
+let dirtyPresets = new Set();
+
+async function loadPresets() {
+  try {
+    const r = await fetch('/api/presets');
+    const data = await r.json();
+    presets = data.presets || [];
+    renderPresets();
+  } catch(e) {
+    document.getElementById('presetList').innerHTML =
+      `<div style="color:#c0392b;padding:20px;">${e.message}</div>`;
+  }
+}
+
+function renderPresets() {
+  const el = document.getElementById('presetList');
+  if (!presets.length) {
+    el.innerHTML = '<div style="color:#aaa;font-size:13px;padding:20px;text-align:center;">No presets yet. Click "+ New Preset" to create one.</div>';
+    return;
+  }
+  el.innerHTML = presets.map(p => presetCardHTML(p)).join('');
+}
+
+function presetCardHTML(p) {
+  const slotsHTML = p.slots.map((s, i) => `
+    <tr>
+      <td class="slot-num">${s.slot_num}</td>
+      <td><input type="time" value="${s.time}" data-preset="${p.name}" data-slot="${i}" data-field="time" onchange="markDirty('${p.name}')"></td>
+      <td><input type="number" min="40" max="100" value="${s.capacity}" data-preset="${p.name}" data-slot="${i}" data-field="capacity" style="width:65px;" onchange="markDirty('${p.name}')"> %</td>
+      <td>
+        <div class="toggle-wrap">
+          <label class="toggle">
+            <input type="checkbox" ${s.grid_charge ? 'checked' : ''} data-preset="${p.name}" data-slot="${i}" data-field="grid_charge" onchange="markDirty('${p.name}')">
+            <div class="toggle-track"></div>
+            <div class="toggle-thumb"></div>
+          </label>
+          <span class="toggle-label">${s.grid_charge ? 'On' : 'Off'}</span>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="preset-card" id="card-${p.name}">
+      <div class="preset-header" onclick="toggleCard('${p.name}')">
+        <div>
+          <div class="preset-name">${p.name} <span class="dirty-dot" id="dirty-${p.name}"></span></div>
+          <div class="preset-desc">${p.description || '—'}</div>
+        </div>
+        <div class="preset-actions">
+          <span class="chevron">▼</span>
+        </div>
+      </div>
+      <div class="preset-body">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;color:#666;display:block;margin-bottom:4px;">Description</label>
+          <input type="text" value="${p.description || ''}" data-preset="${p.name}" data-field="description"
+            style="width:100%;border:1px solid #d0d5dd;border-radius:6px;padding:6px 10px;font-size:13px;"
+            onchange="markDirty('${p.name}')">
+        </div>
+        <table class="slot-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Start time</th>
+              <th>Min SOC %</th>
+              <th>Grid charge</th>
+            </tr>
+          </thead>
+          <tbody>${slotsHTML}</tbody>
+        </table>
+        <div class="save-row">
+          <button class="btn btn-danger btn-sm" onclick="deletePreset('${p.name}')">Delete</button>
+          <button class="btn btn-primary btn-sm" onclick="savePreset('${p.name}')">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleCard(name) {
+  const card = document.getElementById('card-' + name);
+  card.classList.toggle('open');
+}
+
+function markDirty(name) {
+  dirtyPresets.add(name);
+  const dot = document.getElementById('dirty-' + name);
+  if (dot) dot.style.display = 'inline-block';
+  // Update toggle label live
+  const card = document.getElementById('card-' + name);
+  card.querySelectorAll('input[data-field="grid_charge"]').forEach(cb => {
+    const label = cb.closest('.toggle-wrap')?.querySelector('.toggle-label');
+    if (label) label.textContent = cb.checked ? 'On' : 'Off';
+  });
+}
+
+function getPresetData(name) {
+  const card = document.getElementById('card-' + name);
+  const descInput = card.querySelector('input[data-field="description"]');
+  const description = descInput ? descInput.value : '';
+  const slots = [];
+  for (let i = 0; i < 6; i++) {
+    const time     = card.querySelector(`input[data-slot="${i}"][data-field="time"]`)?.value || '00:00';
+    const capacity = parseInt(card.querySelector(`input[data-slot="${i}"][data-field="capacity"]`)?.value || '40');
+    const grid_charge = card.querySelector(`input[data-slot="${i}"][data-field="grid_charge"]`)?.checked ?? true;
+    slots.push({ slot_num: i + 1, time, capacity, grid_charge });
+  }
+  return { description, slots };
+}
+
+async function savePreset(name) {
+  const data = getPresetData(name);
+  try {
+    const r = await fetch(`/api/presets/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const result = await r.json();
+    if (!r.ok) throw new Error(result.error || 'Save failed');
+    dirtyPresets.delete(name);
+    const dot = document.getElementById('dirty-' + name);
+    if (dot) dot.style.display = 'none';
+    showToast(`Preset '${name}' saved`);
+  } catch(e) {
+    showToast(e.message, true);
+  }
+}
+
+async function deletePreset(name) {
+  if (!confirm(`Delete preset '${name}'? This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`/api/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const result = await r.json();
+    if (!r.ok) throw new Error(result.error || 'Delete failed');
+    presets = presets.filter(p => p.name !== name);
+    renderPresets();
+    showToast(`Preset '${name}' deleted`);
+  } catch(e) {
+    showToast(e.message, true);
+  }
+}
+
+function newPreset() {
+  const name = prompt('Preset name (lowercase, no spaces):');
+  if (!name) return;
+  if (!/^[a-z0-9_]+$/.test(name)) { showToast('Name must be lowercase letters, numbers, underscores only', true); return; }
+  if (presets.find(p => p.name === name)) { showToast('Preset already exists', true); return; }
+
+  const defaultSlots = [
+    { slot_num:1, time:'00:00', capacity:55, grid_charge:true },
+    { slot_num:2, time:'07:00', capacity:40, grid_charge:true },
+    { slot_num:3, time:'13:00', capacity:40, grid_charge:true },
+    { slot_num:4, time:'18:00', capacity:60, grid_charge:true },
+    { slot_num:5, time:'18:00', capacity:60, grid_charge:false },
+    { slot_num:6, time:'18:00', capacity:60, grid_charge:false },
+  ];
+  presets.push({ name, description: '', slots: defaultSlots });
+  renderPresets();
+  // Auto-open and mark dirty
+  setTimeout(() => {
+    toggleCard(name);
+    markDirty(name);
+  }, 50);
+}
+
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 2500);
+}
+
+loadPresets();
+</script>
+</body>
+</html>

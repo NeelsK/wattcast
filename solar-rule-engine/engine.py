@@ -63,8 +63,8 @@ OPERATORS = {
 # Config parsing helpers
 # ---------------------------------------------------------------------------
 
-def load_presets(config: dict) -> dict[str, Preset]:
-    """Parse presets section of config into Preset objects."""
+def _load_presets_from_yaml(config: dict) -> dict[str, Preset]:
+    """Parse presets section of config.yaml into Preset objects."""
     presets: dict[str, Preset] = {}
     for name, data in config.get("presets", {}).items():
         raw_slots = data.get("slots", [])
@@ -76,7 +76,6 @@ def load_presets(config: dict) -> dict[str, Preset]:
             )
             for s in raw_slots
         ]
-        # Pad to 6 slots by repeating last slot with grid_charge=False
         while len(slots) < 6:
             last = slots[-1]
             slots.append(TimeSlot(time=last.time, capacity=last.capacity, grid_charge=False))
@@ -86,6 +85,69 @@ def load_presets(config: dict) -> dict[str, Preset]:
             slots=slots[:6],
         )
     return presets
+
+
+def _load_presets_from_db(config: dict) -> dict[str, Preset]:
+    """Load presets from MariaDB. Returns empty dict if tables don't exist or are empty."""
+    try:
+        import pymysql
+        import pymysql.cursors
+        db = config["mariadb"]
+        conn = pymysql.connect(
+            host=db["host"], port=db.get("port", 3306),
+            user=db["user"], password=db["password"], database=db["database"],
+            charset="utf8mb4", cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=3,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT p.name, p.description,
+                           s.slot_num, s.time, s.capacity, s.grid_charge
+                    FROM engine_presets p
+                    LEFT JOIN engine_preset_slots s ON s.preset_id = p.id
+                    ORDER BY p.name, s.slot_num
+                """)
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return {}
+
+        # Group by preset name
+        presets: dict[str, Preset] = {}
+        grouped: dict[str, dict] = {}
+        for row in rows:
+            name = row["name"]
+            if name not in grouped:
+                grouped[name] = {"description": row["description"] or "", "slots": []}
+            if row["slot_num"] is not None:
+                grouped[name]["slots"].append(
+                    TimeSlot(
+                        time=row["time"],
+                        capacity=int(row["capacity"]),
+                        grid_charge=bool(row["grid_charge"]),
+                    )
+                )
+        for name, data in grouped.items():
+            slots = sorted(data["slots"], key=lambda s: s.time)  # already ordered by slot_num
+            presets[name] = Preset(name=name, description=data["description"], slots=slots)
+        return presets
+
+    except Exception as e:
+        logger.warning("Could not load presets from DB: %s — falling back to yaml", e)
+        return {}
+
+
+def load_presets(config: dict) -> dict[str, Preset]:
+    """Load presets from DB first, fall back to yaml config if DB is empty."""
+    presets = _load_presets_from_db(config)
+    if presets:
+        logger.debug("Loaded %d presets from DB", len(presets))
+        return presets
+    logger.info("No presets in DB — loading from config.yaml")
+    return _load_presets_from_yaml(config)
 
 
 def load_rules(config: dict) -> list[Rule]:
